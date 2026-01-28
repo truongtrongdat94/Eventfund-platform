@@ -14,6 +14,7 @@
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
+    "eventfund-ticket-platform": "file:..",
     "express": "^5.2.1",
     "helmet": "^8.1.0",
     "ioredis": "^5.9.2",
