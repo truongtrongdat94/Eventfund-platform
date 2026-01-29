@@ -2,7 +2,7 @@
 
 Nền tảng tạo quỹ sự kiện, bán, trao đổi và chứng thực vé sự kiện trên blockchain.
 
-##  Kiến trúc
+## Kiến trúc
 
 ```
 eventfund-ticket-platform/
@@ -11,27 +11,31 @@ eventfund-ticket-platform/
 └── contracts/         # Solidity Smart Contracts (Hardhat)
 ```
 
-##  Tech Stack
+## Tech Stack
 
 ### Frontend
+
 - React 19
 - Vite 7
 - ESLint
 
 ### Backend
+
 - Express.js 5
 - MongoDB (Mongoose)
 - Redis (ioredis)
 - Helmet (Security)
 
 ### Smart Contracts
+
 - Solidity
 - Hardhat
 - Hardhat Toolbox
 
-##  Cài đặt
+## Cài đặt
 
 ### Yêu cầu
+
 - Node.js >= 18
 - MongoDB
 - Redis
@@ -69,7 +73,7 @@ Tạo file `.env` trong thư mục `contracts/`:
 PRIVATE_KEY=your_wallet_private_key
 ```
 
-##  Chạy ứng dụng
+## Chạy ứng dụng
 
 ### Development
 
@@ -96,7 +100,7 @@ npm run contracts node          # Chạy local node
 npm run contracts ignition deploy ./ignition/modules/Lock.js
 ```
 
-##  Cấu trúc chi tiết
+## Cấu trúc chi tiết
 
 ### Backend (`/backend`)
 
@@ -134,15 +138,15 @@ contracts/
 └── ignition/           # Deployment scripts
 ```
 
-##  Smart Contracts
+## Smart Contracts
 
-| Contract | Mô tả |
-|----------|-------|
-| `Fund.sol` | Quản lý gây quỹ cho sự kiện |
-| `Ticket.sol` | NFT ticket cho sự kiện |
-| `Marketplace.sol` | Sàn giao dịch vé |
+| Contract          | Mô tả                       |
+| ----------------- | --------------------------- |
+| `Fund.sol`        | Quản lý gây quỹ cho sự kiện |
+| `Ticket.sol`      | NFT ticket cho sự kiện      |
+| `Marketplace.sol` | Sàn giao dịch vé            |
 
-##  Testing
+## Testing
 
 ```bash
 # Backend tests
