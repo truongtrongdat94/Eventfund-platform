@@ -44,10 +44,10 @@ interface ITicket {
     }
 
     // ============ Events ============
-    event TicketMinted(
-        uint256 indexed tokenId,
-        uint256 indexed eventId,
+    event TicketMintedBatch(
         address indexed to,
+        uint256 indexed eventId,
+        uint256[] tokenIds,
         uint256 price,
         TicketType ticketType
     );
@@ -133,6 +133,13 @@ interface ITicket {
         TicketType ticketType,
         uint256 quantity
     ) external returns (uint256[] memory tokenIds);
+
+    /// @notice Purchase a ticket (called when user buys a ticket)
+    /// @param tokenId The ticket token ID to purchase
+    function purchaseTicket(uint256 tokenId) external payable;
+
+    /// @notice Mark ticket as used (called when ticket is checked-in)
+    function markAsUsed(uint256 tokenId) external;
 
     /// @notice Mark ticket as expired (called after event ends)
     function markAsExpired(uint256 tokenId) external;
