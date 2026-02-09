@@ -56,8 +56,8 @@ export const disconnectDB = async () => {
   try {
     await mongoose.disconnect();
     isConnected = false;
-    console.log('🔌 Đã ngắt kết nối MongoDB');
+    console.log('Đã ngắt kết nối MongoDB');
   } catch (error) {
-    console.error('❌ Lỗi ngắt kết nối:', error.message);
+    console.error('Lỗi ngắt kết nối:', error.message);
   }
 };
