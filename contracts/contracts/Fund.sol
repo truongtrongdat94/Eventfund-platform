@@ -1,26 +1,38 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "./contracts/shared/ITicket.sol";
-import "./contracts/shared/IFund.sol";
+import "./shared/ITicket.sol";
+import "./shared/IFund.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract Fund is IFund {
-    // -----------------------
-    // ReentrancyGuard (lightweight)
-    // -----------------------
-    uint256 private _locked = 1;
-    modifier nonReentrant() {
-        require(_locked == 1, "REENTRANCY");
-        _locked = 2;
-        _;
-        _locked = 1;
-    }
-
+/**
+ * @title Fund
+ * @notice Quản lý funding + reward chia doanh thu + refund pool cho từng event.
+ *         Ticket SALE phải nằm ở Ticket.sol (Fund KHÔNG có hàm mua ticket).
+ *
+ * Flow:
+ *  1) organizer createEvent() + stake
+ *  2) donators contribute() => mint shares (1 wei = 1 share)
+ *  3) finalizeFunding():
+ *      - trước deadline: chỉ cho finalize nếu đạt goal (status Funded)
+ *      - sau deadline : nếu chưa đạt goal => Cancelled, nếu đạt => giữ Funded
+ *  4) startTicketing(): chỉ organizer, chỉ sau Funded + sharesFinalized, gọi Ticket.sol mintBatch()
+ *  5) setCompletedIfThresholdMet(): chỉ organizer, check totalUsed từ Ticket.sol >= usedThreshold
+ *  6) releaseRevenue(): chỉ organizer, chỉ khi Completed, lấy revenue từ Ticket.sol và chia:
+ *      platform fee -> admin, organizer share -> organizer, phần còn lại -> donatorPool
+ *      donatorPool được ghi nhận qua accRewardPerShare
+ *  7) claimReward(): donator claim reward
+ *  8) refundTickets(): admin/organizer bật refund mode
+ *  9) claimTicketRefund(): Ticket.sol gọi để payout refund theo tokenId
+ * 10) applyPenalty(): admin slash stake của organizer => refundPool
+ */
+contract Fund is IFund, ReentrancyGuard {
     // -----------------------
     // Errors
     // -----------------------
     error NotAdmin();
     error NotOrganizer();
+    error NotAuthorized(); // organizer OR admin
     error EventNotFound();
     error BadParam();
     error NotFunding();
@@ -39,9 +51,6 @@ contract Fund is IFund {
     error ExceedsMaxTickets();
     error ShareLocked();
 
-    // -----------------------
-    // Constants
-    // -----------------------
     address public immutable admin;
     uint256 public constant PLATFORM_FEE_BPS = 500; // 5%
     uint256 public constant BPS_DENOM = 10_000;
@@ -61,15 +70,17 @@ contract Fund is IFund {
         uint256 fundingGoal;
         uint256 currentFunding;
         uint256 fundingDeadline;
+
+        // Stake requirement
         uint256 minStakeRequired;
         uint256 organizerStakeLocked;
 
-        // Ticket params (Ticket.sol handles sales)
+        // Ticket params (Ticket.sol handles SALE)
         uint256 ticketPrice;
         uint256 maxTickets;
 
         // Completion threshold (based on Ticket.sol used count)
-        uint256 usedThreshold; // number of used tickets required to mark Completed
+        uint256 usedThreshold;
 
         // Pools
         uint256 refundPool;
@@ -77,14 +88,14 @@ contract Fund is IFund {
 
         // Revenue distribution
         uint256 organizerShareBps;
-        bool sharesFinalized;
-        bool revenueReleased;
+        bool sharesFinalized;   // khóa contribute/mint shares
+        bool revenueReleased;   // khóa releaseRevenue
 
-        // Shares (internal)
+        // Shares
         uint256 totalShares;
         mapping(address => uint256) shareOf;
 
-        // Rewards accounting
+        // Rewards accounting (MasterChef-like)
         uint256 accRewardPerShare; // scaled by 1e18
         mapping(address => uint256) rewardDebt;
         mapping(address => uint256) pending;
@@ -92,7 +103,7 @@ contract Fund is IFund {
         // Status
         EventStatus status;
 
-        // Ticket mint tracking (optional but helpful)
+        // Ticket mint tracking
         uint256 totalMinted;
     }
 
@@ -103,6 +114,7 @@ contract Fund is IFund {
     // Events
     // -----------------------
     event TicketContractSet(address ticket);
+
     event EventCreated(
         uint256 indexed eventId,
         address indexed organizer,
@@ -120,7 +132,7 @@ contract Fund is IFund {
     event SharesIssued(uint256 indexed eventId, address indexed donator, uint256 sharesMinted);
 
     event FundingSuccessful(uint256 indexed eventId);
-    event FundingFinalized(uint256 indexed eventId, uint256 totalShares);
+    event FundingFinalized(uint256 indexed eventId, uint256 totalShares, EventStatus statusAfterFinalize);
 
     event TicketingStarted(uint256 indexed eventId, uint256 mintedQty, uint8 ticketType);
     event Completed(uint256 indexed eventId, uint256 usedTickets);
@@ -159,6 +171,12 @@ contract Fund is IFund {
         _;
     }
 
+    modifier onlyOrganizerOrAdmin(uint256 eventId) {
+        EventConfig storage e = _mustGet(eventId);
+        if (msg.sender != e.organizer && msg.sender != admin) revert NotAuthorized();
+        _;
+    }
+
     modifier onlyTicket() {
         if (address(ticket) == address(0)) revert TicketContractNotSet();
         if (msg.sender != address(ticket)) revert OnlyTicketContract();
@@ -180,8 +198,10 @@ contract Fund is IFund {
     function pendingReward(uint256 eventId, address user) external view returns (uint256) {
         EventConfig storage e = _mustGet(eventId);
         uint256 shares = e.shareOf[user];
+
         uint256 accumulated = (shares * e.accRewardPerShare) / 1e18;
         uint256 debt = e.rewardDebt[user];
+
         uint256 p = e.pending[user];
         if (accumulated > debt) p += (accumulated - debt);
         return p;
@@ -201,9 +221,15 @@ contract Fund is IFund {
     ) external payable returns (uint256 eventId) {
         if (fundingGoal == 0) revert BadParam();
         if (fundingDeadline == 0 || fundingDeadline <= block.timestamp) revert BadParam();
+
+        // stake requirement
         if (minStakeRequired == 0) revert BadParam();
         if (msg.value < minStakeRequired) revert BadParam();
+
+        // revenue split
         if (organizerShareBps > BPS_DENOM) revert BadParam();
+
+        // ticket params
         if (ticketPrice == 0 || maxTickets == 0) revert BadParam();
         if (usedThreshold == 0 || usedThreshold > maxTickets) revert BadParam();
 
@@ -211,12 +237,15 @@ contract Fund is IFund {
         EventConfig storage e = events_[eventId];
 
         e.organizer = msg.sender;
+
         e.fundingGoal = fundingGoal;
         e.fundingDeadline = fundingDeadline;
+
         e.minStakeRequired = minStakeRequired;
         e.organizerStakeLocked = msg.value;
 
         e.organizerShareBps = organizerShareBps;
+
         e.ticketPrice = ticketPrice;
         e.maxTickets = maxTickets;
         e.usedThreshold = usedThreshold;
@@ -248,16 +277,20 @@ contract Fund is IFund {
         if (e.sharesFinalized) revert ShareLocked();
         if (msg.value == 0) revert BadParam();
 
+        // update reward before changing shares
         _updateUser(e, msg.sender);
 
-        uint256 shares = msg.value; // 1 wei = 1 share
+        // 1 wei = 1 share
+        uint256 shares = msg.value;
         e.shareOf[msg.sender] += shares;
         e.totalShares += shares;
+
         e.currentFunding += msg.value;
 
         emit ContributionMade(eventId, msg.sender, msg.value);
         emit SharesIssued(eventId, msg.sender, shares);
 
+        // đạt goal => chuyển trạng thái Funded (nhưng CHƯA finalize shares)
         if (e.currentFunding >= e.fundingGoal) {
             e.status = EventStatus.Funded;
             emit FundingSuccessful(eventId);
@@ -267,34 +300,34 @@ contract Fund is IFund {
     // -----------------------
     // finalizeFunding() FIX:
     // - chỉ organizer hoặc admin gọi
-    // - gọi trước deadline => phải đạt goal (Funded)
-    // - gọi sau deadline => nếu chưa đạt goal => Cancelled
+    // - gọi trước deadline => phải đạt goal (status Funded)
+    // - gọi sau deadline  => nếu chưa đạt goal => Cancelled
+    // - luôn lock shares sau finalize (không contribute thêm)
     // -----------------------
-    function finalizeFunding(uint256 eventId) external {
+    function finalizeFunding(uint256 eventId) external onlyOrganizerOrAdmin(eventId) {
         EventConfig storage e = _mustGet(eventId);
-
-        if (msg.sender != e.organizer && msg.sender != admin) revert NotAdmin();
         if (e.sharesFinalized) revert AlreadyFinalized();
 
         bool afterDeadline = block.timestamp > e.fundingDeadline;
 
         if (!afterDeadline) {
+            // muốn finalize sớm => phải đủ goal
             if (e.status != EventStatus.Funded) revert Unsafe();
         } else {
+            // sau deadline mà chưa đủ goal => Cancelled
             if (e.status != EventStatus.Funded) {
                 e.status = EventStatus.Cancelled;
             }
         }
 
         e.sharesFinalized = true;
-        emit FundingFinalized(eventId, e.totalShares);
+        emit FundingFinalized(eventId, e.totalShares, e.status);
     }
 
     // -----------------------
-    // startTicketing() NEW:
-    // - chỉ organizer gọi
-    // - sau khi Funded + sharesFinalized
-    // - mint vé thông qua Ticket.sol (Fund KHÔNG tự bán)
+    // startTicketing() (manual) - organizer gọi
+    // - chỉ sau khi Funded + sharesFinalized
+    // - Fund không bán vé, chỉ mint vé qua Ticket.sol
     // -----------------------
     function startTicketing(
         uint256 eventId,
@@ -306,12 +339,13 @@ contract Fund is IFund {
 
         if (e.status != EventStatus.Funded) revert NotFunded();
         if (!e.sharesFinalized) revert Unsafe();
+
         if (quantity == 0) revert BadParam();
 
         // đảm bảo không mint vượt maxTickets
         if (e.totalMinted + quantity > e.maxTickets) revert ExceedsMaxTickets();
 
-        // mintBatch(to=organizer, eventId, price, type, qty)
+        // Ticket mintBatch(to, eventId, price, type, qty)
         tokenIds = ticket.mintBatch(
             e.organizer,
             eventId,
@@ -327,16 +361,19 @@ contract Fund is IFund {
     }
 
     // -----------------------
-    // Completed logic NEW:
-    // - chỉ organizer gọi
+    // Completed logic (manual) - organizer gọi
     // - kiểm tra usedThreshold từ Ticket.sol (getUsageStats)
     // -----------------------
     function setCompletedIfThresholdMet(uint256 eventId) external onlyOrganizer(eventId) {
         EventConfig storage e = _mustGet(eventId);
         if (address(ticket) == address(0)) revert TicketContractNotSet();
+
         if (e.status != EventStatus.Ticketing) revert NotTicketing();
 
+        // Ticket.sol trả usage stats, lấy totalUsed
         (, , uint256 totalUsed, ) = ticket.getUsageStats(eventId);
+
+        // chưa đạt threshold => không cho Completed
         if (totalUsed < e.usedThreshold) revert Unsafe();
 
         e.status = EventStatus.Completed;
@@ -352,10 +389,13 @@ contract Fund is IFund {
     function releaseRevenue(uint256 eventId) external nonReentrant onlyOrganizer(eventId) {
         EventConfig storage e = _mustGet(eventId);
         if (address(ticket) == address(0)) revert TicketContractNotSet();
+
         if (!e.sharesFinalized) revert Unsafe();
         if (e.revenueReleased) revert AlreadyFinalized();
         if (e.status != EventStatus.Completed) revert NotCompleted();
         if (e.totalShares == 0) revert BadParam();
+
+        // Nếu đã bật refunds thì không được release revenue (tránh double-mode)
         if (e.refundsEnabled) revert Unsafe();
 
         uint256 totalRevenue = ticket.getTotalRevenue(eventId);
@@ -363,12 +403,15 @@ contract Fund is IFund {
 
         e.revenueReleased = true;
 
+        // 1) platform fee
         uint256 platformFee = (totalRevenue * PLATFORM_FEE_BPS) / BPS_DENOM;
         uint256 afterFee = totalRevenue - platformFee;
 
+        // 2) organizer share
         uint256 organizerShare = (afterFee * e.organizerShareBps) / BPS_DENOM;
         uint256 donatorPool = afterFee - organizerShare;
 
+        // 3) payout fee + organizer
         if (platformFee > 0) {
             (bool okFee, ) = admin.call{value: platformFee}("");
             if (!okFee) revert TransferFailed();
@@ -378,13 +421,19 @@ contract Fund is IFund {
             if (!okOrg) revert TransferFailed();
         }
 
+        // 4) donator pool => accRewardPerShare
         e.accRewardPerShare += (donatorPool * 1e18) / e.totalShares;
 
         emit RevenueReleased(eventId, totalRevenue, platformFee, organizerShare, donatorPool, e.accRewardPerShare);
     }
 
+    // -----------------------
+    // claimReward() - donator claim reward theo shares
+    // -----------------------
     function claimReward(uint256 eventId) external nonReentrant {
         EventConfig storage e = _mustGet(eventId);
+
+        // cập nhật pending theo accRewardPerShare
         _updateUser(e, msg.sender);
 
         uint256 amt = e.pending[msg.sender];
@@ -400,11 +449,11 @@ contract Fund is IFund {
 
     // -----------------------
     // refundTickets() enable refund mode
-    // (admin hoặc organizer)
+    // - admin hoặc organizer bật
+    // - Ticket.sol sẽ gọi claimTicketRefund() từng vé
     // -----------------------
-    function refundTickets(uint256 eventId) external {
+    function refundTickets(uint256 eventId) external onlyOrganizerOrAdmin(eventId) {
         EventConfig storage e = _mustGet(eventId);
-        if (msg.sender != admin && msg.sender != e.organizer) revert NotAdmin();
 
         e.refundsEnabled = true;
         emit RefundsEnabled(eventId, e.refundPool);
@@ -415,7 +464,7 @@ contract Fund is IFund {
     // Ticket.sol phải validate:
     // - tokenId thuộc eventId
     // - owner đúng
-    // - status Sold/Refundable
+    // - trạng thái cho phép refund
     // rồi gọi Fund để payout, sau đó Ticket.sol markAsRefunded(tokenId)
     // -----------------------
     function claimTicketRefund(uint256 eventId, uint256 tokenId, address to)
@@ -424,6 +473,7 @@ contract Fund is IFund {
         onlyTicket
     {
         EventConfig storage e = _mustGet(eventId);
+
         if (!e.refundsEnabled) revert RefundsNotEnabled();
         if (to == address(0)) revert BadParam();
 
@@ -462,16 +512,23 @@ contract Fund is IFund {
         uint256 accumulated = (shares * e.accRewardPerShare) / 1e18;
         uint256 debt = e.rewardDebt[user];
 
+        // pending += (accumulated - debt)
         if (accumulated > debt) {
             e.pending[user] += (accumulated - debt);
         }
+
+        // set new debt
         e.rewardDebt[user] = accumulated;
     }
 
+    // -----------------------
+    // Internal: must get event
+    // -----------------------
     function _mustGet(uint256 eventId) internal view returns (EventConfig storage e) {
         e = events_[eventId];
         if (e.status == EventStatus.None) revert EventNotFound();
     }
 
+    // receive ether (e.g. admin top-up refund pool via applyPenalty or direct transfer)
     receive() external payable {}
 }
