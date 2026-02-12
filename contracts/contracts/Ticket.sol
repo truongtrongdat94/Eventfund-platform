@@ -1,0 +1,259 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
+import "./shared/ITicket.sol";
+
+contract Ticket is ERC721, ERC721Enumerable, AccessControl, ReentrancyGuard, ITicket {
+    // Variables
+    uint256 private _nextTicketId = 1;
+
+    constructor() ERC721("EventFund Ticket", "EFT") {}
+
+    // Role definitions
+    bytes32 public constant ORGANIZER_ROLE = keccak256("ORGANIZER_ROLE");
+    bytes32 public constant VERIFIER_ROLE = keccak256("VERIFIER_ROLE");
+
+    // ------ Errors -------
+    error ZeroAddress();
+    error InvalidPrice();
+    error InvalidTicketStatus();
+    error InsufficientPayment();
+    error TransferFailed();
+    error SalesInactive();
+
+    // ------ Mappings -------
+    mapping(uint256 => TicketInfo) public _tickets; // ticketId => TicketInfo
+    mapping(uint256 => EventTicketInfo) public _eventTickets; // eventId => EventTicketInfo
+    mapping(uint256 => uint256[]) public _eventTokenIds; // eventId => ticketIds
+
+    //------ Minting -------
+
+    // mint one type of ticket per batch
+    /// @inheritdoc ITicket
+    function mintBatch(
+        address to,
+        uint256 eventId,
+        uint256 price,
+        TicketType ticketType,
+        uint256 quantity
+    ) 
+        external
+        override
+        onlyRole(ORGANIZER_ROLE)
+        nonReentrant
+        returns (uint256[] memory)
+    {
+        if (to == address(0)) revert ZeroAddress();
+        if (price == 0) revert InvalidPrice();
+        if (quantity == 0) revert InvalidPrice();
+        EventTicketInfo storage eventInfo = _eventTickets[eventId];
+        if (eventInfo.salesActive == false) {
+            revert SalesInactive(); // ngưng bán khi event kết thúc hoặc bị hủy
+        }
+        uint256[] memory ticketIds = new uint256[](quantity);
+        for (uint256 i = 0; i < quantity; i++) {
+            uint256 ticketId = _nextTicketId++;
+            _tickets[ticketId] = TicketInfo({
+                eventId: eventId,
+                price: price,
+                status: TicketStatus.Minted,
+                ticketType: ticketType,
+                mintedAt: block.timestamp,
+                soldAt: 0,
+                usedAt: 0,
+                verifiedBy: address(0)
+            });
+            _eventTickets[eventId].totalMinted += 1;
+            _eventTokenIds[eventId].push(ticketId);
+
+            _safeMint(to, ticketId);
+            ticketIds[i] = ticketId;
+        }
+
+        emit TicketMintedBatch(to, eventId, ticketIds, price, ticketType);
+
+        return ticketIds;
+    }
+
+    // ------ Purchase function ------
+    /// @inheritdoc ITicket
+    function purchaseTicket(uint256 tokenId) public payable override nonReentrant {
+        TicketInfo storage ticket = _tickets[tokenId];
+
+        // validations
+        if (ticket.status != TicketStatus.Minted) {
+            revert InvalidTicketStatus();
+        }
+
+        if (_eventTickets[ticket.eventId].salesActive == false) {
+            revert SalesInactive(); // ngưng bán khi event kết thúc hoặc bị hủy
+        }
+
+        if (msg.value < ticket.price) {
+            revert InsufficientPayment();
+        }
+
+        // update ticket info
+        ticket.status = TicketStatus.Sold;
+        ticket.soldAt = block.timestamp;
+
+        // update event ticket info
+        _eventTickets[ticket.eventId].totalSold += 1;
+        _eventTickets[ticket.eventId].totalRevenue += ticket.price;
+
+        // transfer ticket to buyer
+        _safeTransfer(ownerOf(tokenId), msg.sender, tokenId);
+
+        // Case: refund excess payment
+        if (msg.value > ticket.price) {
+            (bool success, ) = payable(msg.sender).call{value: msg.value - ticket.price}("");
+            if (!success) {
+                revert TransferFailed();
+            }
+        }
+
+        emit TicketPurchased(tokenId, ticket.eventId, msg.sender, ticket.price);
+    }
+
+    // ------ Usage functions ------
+
+    /// @inheritdoc ITicket
+    function markAsUsed(uint256 tokenId) external override onlyRole(VERIFIER_ROLE) {
+        TicketInfo storage ticket = _tickets[tokenId];
+        if (ticket.status != TicketStatus.Sold) {
+            revert InvalidTicketStatus();
+        }
+        ticket.status = TicketStatus.Used;
+        ticket.usedAt = block.timestamp;
+        ticket.verifiedBy = msg.sender;
+        _eventTickets[ticket.eventId].totalUsed += 1;
+    }
+
+    /// @inheritdoc ITicket
+    function markAsExpired(uint256 tokenId) external override onlyRole(VERIFIER_ROLE) {
+        TicketInfo storage ticket = _tickets[tokenId];
+        if (ticket.status != TicketStatus.Sold) {
+            revert InvalidTicketStatus();
+        }
+        ticket.status = TicketStatus.Expired;
+    }
+
+    /// @inheritdoc ITicket
+    function markAsRefunded(uint256 tokenId) external override onlyRole(VERIFIER_ROLE) {
+        TicketInfo storage ticket = _tickets[tokenId];
+        if (ticket.status != TicketStatus.Sold) {
+            revert InvalidTicketStatus();
+        }
+        ticket.status = TicketStatus.Refunded;
+    }
+
+    // ------ View Functions (ITicket implementation) ------
+
+    /// @inheritdoc ITicket
+    function getUsageStats(uint256 eventId) 
+        external 
+        view 
+        override
+        returns (
+            uint256 totalMinted, 
+            uint256 totalSold, 
+            uint256 totalUsed, 
+            uint256 usageRatio
+        ) 
+    {
+        EventTicketInfo storage eventInfo = _eventTickets[eventId];
+        totalMinted = eventInfo.totalMinted;
+        totalSold = eventInfo.totalSold;
+        totalUsed = eventInfo.totalUsed;
+        if (totalSold == 0) {
+            usageRatio = 0;
+        } else {
+            usageRatio = (totalUsed * 10000) / totalSold; // multiplied by 100 for percentage with two decimals
+        }
+        return (totalMinted, totalSold, totalUsed, usageRatio);
+    }
+
+    /// @inheritdoc ITicket
+    function getTotalRevenue(uint256 eventId) external view override returns (uint256) {
+        EventTicketInfo storage eventInfo = _eventTickets[eventId];
+        return eventInfo.totalRevenue;
+    }
+
+    /// @inheritdoc ITicket
+    function getEventTicketInfo(uint256 eventId) external view override returns (EventTicketInfo memory) {
+        return _eventTickets[eventId];
+    }
+
+    /// @inheritdoc ITicket
+    function getEventTokenIds(uint256 eventId) external view override returns (uint256[] memory) {
+        return _eventTokenIds[eventId];
+    }
+
+    /// @inheritdoc ITicket
+    function getTicketInfo(uint256 tokenId) external view override returns (TicketInfo memory) {
+        return _tickets[tokenId];
+    }
+
+    /// @inheritdoc ITicket
+    function getTicketStatus(uint256 tokenId) external view override returns (TicketStatus) {
+        return _tickets[tokenId].status;
+    }
+
+    /// @inheritdoc ITicket
+    function getTicketPrice(uint256 tokenId) external view override returns (uint256) {
+        return _tickets[tokenId].price;
+    }
+
+    /// @inheritdoc ITicket
+    function getEventId(uint256 tokenId) external view override returns (uint256) {
+        return _tickets[tokenId].eventId;
+    }
+
+    /// @inheritdoc ITicket
+    // TODO: change this logic after implementing refund and expiration
+    function isTransferable(uint256 tokenId) external view override returns (bool) {
+        // TicketStatus status = _tickets[tokenId].status;
+        // return (status == TicketStatus.Minted || status == TicketStatus.Sold);
+        return false;
+    }
+
+    // ------ Override supportsInterface ------
+    function supportsInterface(bytes4 interfaceId) 
+        public 
+        view 
+        override(ERC721, ERC721Enumerable, AccessControl) 
+        returns (bool) 
+    {
+        return super.supportsInterface(interfaceId);
+    }
+
+     function _update(address to, uint256 tokenId, address auth)
+        internal
+        override(ERC721, ERC721Enumerable)
+        returns (address)
+    {
+        // Prevent transfer of used/expired/refunded tickets
+        if (_ownerOf(tokenId) != address(0)) { // Not minting
+            TicketStatus status = _tickets[tokenId].status;
+            if (status == TicketStatus.Used || 
+                status == TicketStatus.Expired || 
+                status == TicketStatus.Refunded) {
+                revert InvalidTicketStatus();
+            }
+        }
+        return super._update(to, tokenId, auth);
+    }
+
+    function _increaseBalance(address account, uint128 value)
+        internal
+        override(ERC721, ERC721Enumerable)
+    {
+        super._increaseBalance(account, value);
+    }
+
+}
