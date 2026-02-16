@@ -1,5 +1,11 @@
 # Sample Hardhat Project
 
+## Project Notes
+
+- Ticket quick fixes (Phase 1): see [docs/ticket-fixes.md](docs/ticket-fixes.md)
+- Fund quick fixes (Phase 1): see [docs/fund-fixes.md](docs/fund-fixes.md)
+- Marketplace quick fixes (Phase 1): see [docs/marketplace-fixes.md](docs/marketplace-fixes.md)
+
 This project demonstrates a basic Hardhat use case. It comes with a sample contract, a test for that contract, and a Hardhat Ignition module that deploys that contract.
 
 Try running some of the following tasks:
