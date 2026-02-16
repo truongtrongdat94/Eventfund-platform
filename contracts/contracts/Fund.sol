@@ -51,6 +51,9 @@ contract Fund is IFund, ReentrancyGuard {
     error ExceedsMaxTickets();
     error ShareLocked();
 
+    // FIX: prevent funds getting stuck due to missing settlement paths.
+    error NothingToWithdraw();
+
     address public immutable admin;
     uint256 public constant PLATFORM_FEE_BPS = 500; // 5%
     uint256 public constant BPS_DENOM = 10_000;
@@ -85,6 +88,10 @@ contract Fund is IFund, ReentrancyGuard {
         // Pools
         uint256 refundPool;
         bool refundsEnabled;
+
+        // FIX (critical): track real escrowed revenue inside Fund per event.
+        // Ticket.sol forwards ticket sale proceeds into Fund via depositTicketRevenue(eventId).
+        uint256 escrowedRevenue;
 
         // Revenue distribution
         uint256 organizerShareBps;
@@ -153,6 +160,13 @@ contract Fund is IFund, ReentrancyGuard {
 
     event PenaltyApplied(uint256 indexed eventId, uint256 amount, uint256 penaltyBps, PenaltyReason reason);
 
+    // FIX: escrow deposit events for off-chain sync.
+    event TicketRevenueDeposited(uint256 indexed eventId, address indexed from, uint256 amount, uint256 newEscrowedRevenue);
+
+    // FIX: settlements to avoid locked funds.
+    event ContributionRefunded(uint256 indexed eventId, address indexed donator, uint256 amount);
+    event StakeWithdrawn(uint256 indexed eventId, address indexed organizer, uint256 amount);
+
     // -----------------------
     // Constructor / Modifiers
     // -----------------------
@@ -190,6 +204,19 @@ contract Fund is IFund, ReentrancyGuard {
         if (ticketAddr == address(0)) revert BadParam();
         ticket = ITicket(ticketAddr);
         emit TicketContractSet(ticketAddr);
+    }
+
+    // -----------------------
+    // Escrow deposits
+    // -----------------------
+    function depositTicketRevenue(uint256 eventId) external payable onlyTicket {
+        // FIX (critical): Ticket.sol forwards ETH into Fund to make releaseRevenue() possible.
+        // We account per event to avoid cross-event balance contamination.
+        if (msg.value == 0) revert BadParam();
+        EventConfig storage e = _mustGet(eventId);
+
+        e.escrowedRevenue += msg.value;
+        emit TicketRevenueDeposited(eventId, msg.sender, msg.value, e.escrowedRevenue);
     }
 
     // -----------------------
@@ -337,7 +364,9 @@ contract Fund is IFund, ReentrancyGuard {
         EventConfig storage e = _mustGet(eventId);
         if (address(ticket) == address(0)) revert TicketContractNotSet();
 
-        if (e.status != EventStatus.Funded) revert NotFunded();
+        // FIX: allow minting multiple batches after ticketing started.
+        // Previously, status was set to Ticketing after first mint, making subsequent mints impossible.
+        if (e.status != EventStatus.Funded && e.status != EventStatus.Ticketing) revert NotFunded();
         if (!e.sharesFinalized) revert Unsafe();
 
         if (quantity == 0) revert BadParam();
@@ -355,7 +384,10 @@ contract Fund is IFund, ReentrancyGuard {
         );
 
         e.totalMinted += quantity;
-        e.status = EventStatus.Ticketing;
+
+        if (e.status == EventStatus.Funded) {
+            e.status = EventStatus.Ticketing;
+        }
 
         emit TicketingStarted(eventId, quantity, ticketType);
     }
@@ -398,8 +430,13 @@ contract Fund is IFund, ReentrancyGuard {
         // Nếu đã bật refunds thì không được release revenue (tránh double-mode)
         if (e.refundsEnabled) revert Unsafe();
 
-        uint256 totalRevenue = ticket.getTotalRevenue(eventId);
+        // FIX (critical): do NOT use Ticket.getTotalRevenue() as the source of funds.
+        // Real ETH is escrowed in Fund via depositTicketRevenue(eventId).
+        uint256 totalRevenue = e.escrowedRevenue;
         if (totalRevenue == 0) revert BadParam();
+
+        // consume escrow for this event so it cannot be released twice
+        e.escrowedRevenue = 0;
 
         e.revenueReleased = true;
 
@@ -457,6 +494,64 @@ contract Fund is IFund, ReentrancyGuard {
 
         e.refundsEnabled = true;
         emit RefundsEnabled(eventId, e.refundPool);
+    }
+
+    // -----------------------
+    // FIX (critical): contribution refunds when funding failed/cancelled
+    // -----------------------
+    function claimContributionRefund(uint256 eventId) external nonReentrant {
+        EventConfig storage e = _mustGet(eventId);
+
+        // Only allow refund if event is cancelled (funding failed / deadline passed without goal)
+        if (e.status != EventStatus.Cancelled) revert Unsafe();
+
+        // shares == contributed wei (1 wei = 1 share)
+        uint256 amount = e.shareOf[msg.sender];
+        if (amount == 0) revert NothingToClaim();
+
+        // FIX: burn user's shares for this event so they can't double-refund
+        e.shareOf[msg.sender] = 0;
+        if (e.totalShares >= amount) {
+            e.totalShares -= amount;
+        } else {
+            // should never happen, but keep state safe
+            e.totalShares = 0;
+        }
+
+        // reset reward tracking (event cancelled => no rewards)
+        e.rewardDebt[msg.sender] = 0;
+        e.pending[msg.sender] = 0;
+
+        (bool ok, ) = msg.sender.call{value: amount}("");
+        if (!ok) revert TransferFailed();
+
+        emit ContributionRefunded(eventId, msg.sender, amount);
+    }
+
+    // -----------------------
+    // FIX: organizer stake withdrawal so stake doesn't stay locked forever
+    // -----------------------
+    function withdrawStake(uint256 eventId) external nonReentrant onlyOrganizer(eventId) {
+        EventConfig storage e = _mustGet(eventId);
+
+        // stake can be withdrawn when:
+        // - event cancelled (after finalize)
+        // - event completed and revenue released OR refunds enabled (settlement decision made)
+        bool canWithdraw =
+            (e.status == EventStatus.Cancelled && e.sharesFinalized) ||
+            (e.status == EventStatus.Completed && (e.revenueReleased || e.refundsEnabled));
+
+        if (!canWithdraw) revert Unsafe();
+
+        uint256 amount = e.organizerStakeLocked;
+        if (amount == 0) revert NothingToWithdraw();
+
+        e.organizerStakeLocked = 0;
+
+        (bool ok, ) = e.organizer.call{value: amount}("");
+        if (!ok) revert TransferFailed();
+
+        emit StakeWithdrawn(eventId, e.organizer, amount);
     }
 
     // -----------------------
@@ -529,6 +624,6 @@ contract Fund is IFund, ReentrancyGuard {
         if (e.status == EventStatus.None) revert EventNotFound();
     }
 
-    // receive ether (e.g. admin top-up refund pool via applyPenalty or direct transfer)
+    // receive ether (e.g. Ticket deposits, marketplace royalty deposits, or admin top-ups)
     receive() external payable {}
 }

@@ -21,6 +21,9 @@ interface IFund {
     
     function setTicketContract(address ticketAddr) external;
 
+    // FIX (critical): Ticket primary sales forward ETH into Fund escrow per event.
+    function depositTicketRevenue(uint256 eventId) external payable;
+
     
     function createEvent(
         uint256 fundingGoal,

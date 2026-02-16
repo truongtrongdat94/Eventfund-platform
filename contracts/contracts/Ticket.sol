@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "./shared/ITicket.sol";
+import "./shared/IFund.sol";
 
 contract Ticket is ERC721, ERC721Enumerable, AccessControl, ReentrancyGuard, ITicket {
     // Variables
@@ -88,7 +89,12 @@ contract Ticket is ERC721, ERC721Enumerable, AccessControl, ReentrancyGuard, ITi
         nonReentrant
         returns (uint256[] memory)
     {
-        if (!hasRole(ORGANIZER_ROLE, msg.sender) && !hasRole(DEFAULT_ADMIN_ROLE, msg.sender)) {
+        // FIX: allow Fund.sol to mint by setting Ticket.fundContract == Fund address.
+        if (
+            msg.sender != fundContract &&
+            !hasRole(ORGANIZER_ROLE, msg.sender) &&
+            !hasRole(DEFAULT_ADMIN_ROLE, msg.sender)
+        ) {
             revert InvalidTicketStatus();
         }
         if (to == address(0)) revert ZeroAddress();
@@ -174,9 +180,9 @@ contract Ticket is ERC721, ERC721Enumerable, AccessControl, ReentrancyGuard, ITi
         // transfer ticket to buyer
         _safeTransfer(seller, msg.sender, tokenId);
 
-        // FIX (critical): forward ticket price to Fund escrow (keeps Fund.releaseRevenue() viable)
-        (bool fundOk, ) = payable(fundContract).call{value: ticket.price}("");
-        if (!fundOk) revert TransferFailed();
+        // FIX (critical): forward ticket price to Fund escrow WITH eventId accounting.
+        // This keeps Fund.releaseRevenue() per-event correct.
+        IFund(fundContract).depositTicketRevenue{value: ticket.price}(ticket.eventId);
 
         // Case: refund excess payment
         if (msg.value > ticket.price) {
