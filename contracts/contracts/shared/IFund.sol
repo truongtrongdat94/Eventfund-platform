@@ -21,8 +21,14 @@ interface IFund {
     
     function setTicketContract(address ticketAddr) external;
 
+    // FIX: allow Fund admin to register Marketplace for royalty deposits.
+    function setMarketplaceContract(address marketplaceAddr) external;
+
     // FIX (critical): Ticket primary sales forward ETH into Fund escrow per event.
     function depositTicketRevenue(uint256 eventId) external payable;
+
+    // FIX (critical): Marketplace royalty must be accounted per event as well.
+    function depositRoyalty(uint256 eventId) external payable;
 
     
     function createEvent(

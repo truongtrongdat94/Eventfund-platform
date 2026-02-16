@@ -63,6 +63,9 @@ contract Fund is IFund, ReentrancyGuard {
     // -----------------------
     ITicket public ticket;
 
+    // FIX: Marketplace deposits royalty into Fund and it must be accounted per event.
+    address public marketplace;
+
     // -----------------------
     // Storage
     // -----------------------
@@ -121,6 +124,7 @@ contract Fund is IFund, ReentrancyGuard {
     // Events
     // -----------------------
     event TicketContractSet(address ticket);
+    event MarketplaceContractSet(address marketplace);
 
     event EventCreated(
         uint256 indexed eventId,
@@ -163,6 +167,9 @@ contract Fund is IFund, ReentrancyGuard {
     // FIX: escrow deposit events for off-chain sync.
     event TicketRevenueDeposited(uint256 indexed eventId, address indexed from, uint256 amount, uint256 newEscrowedRevenue);
 
+    // FIX: royalty deposits (secondary sales) tracked per event.
+    event RoyaltyDeposited(uint256 indexed eventId, address indexed from, uint256 amount, uint256 newEscrowedRevenue);
+
     // FIX: settlements to avoid locked funds.
     event ContributionRefunded(uint256 indexed eventId, address indexed donator, uint256 amount);
     event StakeWithdrawn(uint256 indexed eventId, address indexed organizer, uint256 amount);
@@ -197,6 +204,13 @@ contract Fund is IFund, ReentrancyGuard {
         _;
     }
 
+    // FIX: accept royalty deposits only from registered marketplace.
+    modifier onlyMarketplace() {
+        if (marketplace == address(0)) revert Unsafe();
+        if (msg.sender != marketplace) revert NotAuthorized();
+        _;
+    }
+
     // -----------------------
     // Admin setup
     // -----------------------
@@ -204,6 +218,13 @@ contract Fund is IFund, ReentrancyGuard {
         if (ticketAddr == address(0)) revert BadParam();
         ticket = ITicket(ticketAddr);
         emit TicketContractSet(ticketAddr);
+    }
+
+    function setMarketplaceContract(address marketplaceAddr) external onlyAdmin {
+        // FIX: register marketplace so it can deposit royalty with eventId.
+        if (marketplaceAddr == address(0)) revert BadParam();
+        marketplace = marketplaceAddr;
+        emit MarketplaceContractSet(marketplaceAddr);
     }
 
     // -----------------------
@@ -217,6 +238,16 @@ contract Fund is IFund, ReentrancyGuard {
 
         e.escrowedRevenue += msg.value;
         emit TicketRevenueDeposited(eventId, msg.sender, msg.value, e.escrowedRevenue);
+    }
+
+    function depositRoyalty(uint256 eventId) external payable onlyMarketplace {
+        // FIX (critical): Marketplace must deposit royalty into Fund WITH eventId.
+        // Royalty is treated as event revenue and distributed via releaseRevenue().
+        if (msg.value == 0) revert BadParam();
+        EventConfig storage e = _mustGet(eventId);
+
+        e.escrowedRevenue += msg.value;
+        emit RoyaltyDeposited(eventId, msg.sender, msg.value, e.escrowedRevenue);
     }
 
     // -----------------------

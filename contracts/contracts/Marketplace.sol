@@ -8,6 +8,7 @@ import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
 import "./shared/IMarketplace.sol";
 import "./shared/ITicket.sol";
+import "./shared/IFund.sol";
 
 /**
  * @title Marketplace
@@ -134,7 +135,9 @@ contract Marketplace is IMarketplace, ReentrancyGuard, Ownable, IERC721Receiver 
 
         // 3) Royalty -> Fund contract
         if (royaltyAmount > 0) {
-            _safeTransferETH(fundContract, royaltyAmount);
+            // FIX (critical): do NOT send ETH blindly to Fund.
+            // Deposit royalty with eventId so Fund can account escrow per event.
+            IFund(fundContract).depositRoyalty{value: royaltyAmount}(listing.eventId);
         }
 
         emit ListingSold(listingId, tokenId, msg.sender, seller, listing.price, royaltyAmount);
