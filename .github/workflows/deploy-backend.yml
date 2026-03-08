@@ -99,7 +99,7 @@ jobs:
 
           # Verify critical files exist
           if [ ! -f "backend/contracts/artifacts/contracts/Fund.sol/Fund.json" ]; then
-            echo  Fund.json not found"
+            echo  "Fund.json not found"
             exit 1
           fi
           if [ ! -f "backend/contracts/artifacts/contracts/Ticket.sol/Ticket.json" ]; then
@@ -185,7 +185,7 @@ jobs:
             --restart unless-stopped \
             backend:latest
 
-          echo  Backend container started"
+          echo  "Backend container started"
 
           # Wait for health check
           echo "Waiting for backend to be healthy..."
