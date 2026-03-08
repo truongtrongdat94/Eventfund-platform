@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: eventfund-backend
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=development
+      - PORT=4000
+      # Contract addresses (update after deployment)
+      - FUND_ADDRESS=${FUND_ADDRESS:-0x0000000000000000000000000000000000000000}
+      - TICKET_ADDRESS=${TICKET_ADDRESS:-0x0000000000000000000000000000000000000000}
+      - MARKETPLACE_ADDRESS=${MARKETPLACE_ADDRESS:-0x0000000000000000000000000000000000000000}
+      # Database
+      - MONGO_DEV_URI=${MONGO_DEV_URI}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      # Auth
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=7d
+      # Cloudinary
+      - CLOUDINARY_DEV_NAME=${CLOUDINARY_DEV_NAME}
+      - CLOUDINARY_DEV_KEY=${CLOUDINARY_DEV_KEY}
+      - CLOUDINARY_DEV_SECRET=${CLOUDINARY_DEV_SECRET}
+      # SIWE
+      - SIWE_DOMAIN=${SIWE_DOMAIN:-localhost:4000}
+      - SIWE_URI=${SIWE_URI:-http://localhost:4000}
+      - SIWE_CHAIN_ID=${SIWE_CHAIN_ID:-11155111}
+    env_file:
+      - backend/.env
+    depends_on:
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - eventfund-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: eventfund-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - eventfund-network
+
+volumes:
+  redis-data:
+    driver: local
+
+networks:
+  eventfund-network:
+    driver: bridge

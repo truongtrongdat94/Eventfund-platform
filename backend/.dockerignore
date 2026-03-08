@@ -1,0 +1,48 @@
+# Node modules (will be installed in container)
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Environment files (pass via runtime)
+.env
+.env.*
+!.env.example
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Tests
+tests
+coverage
+*.test.js
+*.spec.js
+__tests__
+
+# Logs
+logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation
+README.md
+*.md
+!package.json
+
+# CI/CD
+.github
+
+# Temporary files
+tmp
+temp
+*.tmp

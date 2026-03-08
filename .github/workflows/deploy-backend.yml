@@ -1,0 +1,229 @@
+name: Deploy Backend with Contracts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/**'
+      - 'backend/**'
+      - '.github/workflows/deploy-backend.yml'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ===== Checkout Code =====
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # ===== Setup Node.js =====
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            contracts/package-lock.json
+            backend/package-lock.json
+
+      # ===== STEP 1: Compile Contracts =====
+      - name: Install Contract Dependencies
+        run: |
+          cd contracts
+          npm ci
+
+      - name: Compile Smart Contracts
+        run: |
+          cd contracts
+          npx hardhat compile
+          echo "Contracts compiled successfully"
+          ls -la artifacts/contracts/
+
+      # ===== STEP 2: Deploy Contracts to Testnet =====
+      - name: Deploy Contracts to Sepolia Testnet
+        env:
+          PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+        run: |
+          cd contracts
+
+          # Run deployment script and capture output
+          npx hardhat run scripts/deploy.js --network sepolia | tee deploy-output.txt
+
+          # Extract contract addresses from deployment output
+          # Adjust grep patterns based on your deploy script output
+          FUND_ADDRESS=$(grep -i "Fund deployed to:" deploy-output.txt | awk '{print $NF}' | tr -d '\r\n')
+          TICKET_ADDRESS=$(grep -i "Ticket deployed to:" deploy-output.txt | awk '{print $NF}' | tr -d '\r\n')
+          MARKETPLACE_ADDRESS=$(grep -i "Marketplace deployed to:" deploy-output.txt | awk '{print $NF}' | tr -d '\r\n')
+
+          # Validate addresses
+          if [ -z "$FUND_ADDRESS" ] || [ -z "$TICKET_ADDRESS" ] || [ -z "$MARKETPLACE_ADDRESS" ]; then
+            echo "Failed to extract contract addresses"
+            cat deploy-output.txt
+            exit 1
+          fi
+
+          # Save addresses to file
+          echo "FUND_ADDRESS=$FUND_ADDRESS" > addresses.txt
+          echo "TICKET_ADDRESS=$TICKET_ADDRESS" >> addresses.txt
+          echo "MARKETPLACE_ADDRESS=$MARKETPLACE_ADDRESS" >> addresses.txt
+
+          # Export to GitHub environment
+          echo "FUND_ADDRESS=$FUND_ADDRESS" >> $GITHUB_ENV
+          echo "TICKET_ADDRESS=$TICKET_ADDRESS" >> $GITHUB_ENV
+          echo "MARKETPLACE_ADDRESS=$MARKETPLACE_ADDRESS" >> $GITHUB_ENV
+
+          echo "Contracts deployed successfully"
+          echo "Fund: $FUND_ADDRESS"
+          echo "Ticket: $TICKET_ADDRESS"
+          echo "Marketplace: $MARKETPLACE_ADDRESS"
+
+      # ===== STEP 3: Copy Artifacts to Backend =====
+      - name: Copy Contract Artifacts to Backend
+        run: |
+          # Remove old artifacts if exists
+          rm -rf backend/contracts/artifacts
+
+          # Create directory structure
+          mkdir -p backend/contracts/artifacts
+
+          # Copy compiled artifacts
+          cp -r contracts/artifacts/contracts backend/contracts/artifacts/
+
+          # Verify copy
+          echo "Artifacts copied to backend"
+          echo "Artifact structure:"
+          ls -la backend/contracts/artifacts/contracts/
+
+          # Verify critical files exist
+          if [ ! -f "backend/contracts/artifacts/contracts/Fund.sol/Fund.json" ]; then
+            echo  Fund.json not found"
+            exit 1
+          fi
+          if [ ! -f "backend/contracts/artifacts/contracts/Ticket.sol/Ticket.json" ]; then
+            echo "Ticket.json not found"
+            exit 1
+          fi
+          if [ ! -f "backend/contracts/artifacts/contracts/Marketplace.sol/Marketplace.json" ]; then
+            echo "Marketplace.json not found"
+            exit 1
+          fi
+
+          echo "All required artifacts verified"
+
+      # ===== STEP 4: Read Contract Addresses =====
+      - name: Load Contract Addresses
+        run: |
+          # Addresses already in $GITHUB_ENV from Step 2
+          echo "Contract Addresses:"
+          echo "FUND_ADDRESS=${{ env.FUND_ADDRESS }}"
+          echo "TICKET_ADDRESS=${{ env.TICKET_ADDRESS }}"
+          echo "MARKETPLACE_ADDRESS=${{ env.MARKETPLACE_ADDRESS }}"
+
+      # ===== STEP 5: Build Docker Image =====
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build Backend Docker Image
+        run: |
+          cd backend
+
+          # Build with git SHA tag and latest tag
+          docker build \
+            -t backend:${{ github.sha }} \
+            -t backend:latest \
+            .
+
+          echo "Docker image built successfully"
+          docker images | grep backend
+
+      # ===== Optional: Push to Docker Registry =====
+      - name: Login to Docker Hub
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Push Docker Image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # Tag with your Docker Hub username
+          docker tag backend:${{ github.sha }} ${{ secrets.DOCKER_USERNAME }}/eventfund-backend:${{ github.sha }}
+          docker tag backend:latest ${{ secrets.DOCKER_USERNAME }}/eventfund-backend:latest
+
+          # Push both tags
+          docker push ${{ secrets.DOCKER_USERNAME }}/eventfund-backend:${{ github.sha }}
+          docker push ${{ secrets.DOCKER_USERNAME }}/eventfund-backend:latest
+
+          echo "Docker images pushed to registry"
+
+      # ===== STEP 6: Deploy Container =====
+      - name: Deploy Backend Container
+        run: |
+          # Stop and remove old container if exists
+          docker stop backend 2>/dev/null || true
+          docker rm backend 2>/dev/null || true
+
+          # Run new container with contract addresses
+          docker run -d \
+            --name backend \
+            -p 4000:4000 \
+            -e NODE_ENV=production \
+            -e PORT=4000 \
+            -e FUND_ADDRESS=${{ env.FUND_ADDRESS }} \
+            -e TICKET_ADDRESS=${{ env.TICKET_ADDRESS }} \
+            -e MARKETPLACE_ADDRESS=${{ env.MARKETPLACE_ADDRESS }} \
+            -e MONGO_PROD_URI=${{ secrets.MONGO_PROD_URI }} \
+            -e REDIS_URL=${{ secrets.REDIS_URL }} \
+            -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
+            -e CLOUDINARY_PROD_NAME=${{ secrets.CLOUDINARY_PROD_NAME }} \
+            -e CLOUDINARY_PROD_KEY=${{ secrets.CLOUDINARY_PROD_KEY }} \
+            -e CLOUDINARY_PROD_SECRET=${{ secrets.CLOUDINARY_PROD_SECRET }} \
+            --restart unless-stopped \
+            backend:latest
+
+          echo  Backend container started"
+
+          # Wait for health check
+          echo "Waiting for backend to be healthy..."
+          sleep 10
+
+          # Check container status
+          docker ps | grep backend
+
+          # Test health endpoint
+          curl -f http://localhost:4000/health || echo " Health check failed"
+
+      # ===== STEP 7: Cleanup Artifacts =====
+      - name: Cleanup Artifacts from Backend
+        if: always()
+        run: |
+          # Remove artifacts to avoid committing them
+          rm -rf backend/contracts/artifacts
+
+          # Verify cleanup
+          if [ -d "backend/contracts/artifacts" ]; then
+            echo "Artifacts directory still exists"
+          else
+            echo "Artifacts cleaned up"
+          fi
+
+      # ===== Summary =====
+      - name: Deployment Summary
+        if: success()
+        run: |
+          echo " Deployment completed successfully!"
+          echo ""
+          echo " Docker Image: backend:${{ github.sha }}"
+          echo " Backend URL: http://localhost:4000"
+          echo ""
+          echo " Contract Addresses:"
+          echo "   Fund:        ${{ env.FUND_ADDRESS }}"
+          echo "   Ticket:      ${{ env.TICKET_ADDRESS }}"
+          echo "   Marketplace: ${{ env.MARKETPLACE_ADDRESS }}"
+          echo ""
+          echo " Sepolia Etherscan:"
+          echo "   https://sepolia.etherscan.io/address/${{ env.FUND_ADDRESS }}"
