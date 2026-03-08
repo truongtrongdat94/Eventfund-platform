@@ -44,7 +44,7 @@ jobs:
       # ===== STEP 2: Deploy Contracts to Testnet =====
       - name: Deploy Contracts to Sepolia Testnet
         env:
-          PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
           SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
         run: |
           cd contracts
