@@ -132,11 +132,11 @@ jobs:
             if [ "$INGRESS_COUNT" -gt 0 ]; then
               echo "✅ Found $INGRESS_COUNT Ingress resource(s) with group.name=eventfund-shared"
               
-              # Thử lấy ALB DNS từ bất kỳ Ingress nào
+              # Lấy ALB DNS từ Ingress đầu tiên (tất cả Ingress cùng group dùng chung 1 ALB)
               ALB_DNS=$(kubectl get ingress -A \
-                -o jsonpath="{.items[?(@.metadata.annotations.alb\.ingress\.kubernetes\.io/group\.name=='eventfund-shared')].status.loadBalancer.ingress[0].hostname}" 2>/dev/null || echo "")
+                -o json 2>/dev/null | jq -r '[.items[] | select(.metadata.annotations."alb.ingress.kubernetes.io/group.name" == "eventfund-shared")] | .[0].status.loadBalancer.ingress[0].hostname' || echo "")
               
-              if [ -n "$ALB_DNS" ]; then
+              if [ -n "$ALB_DNS" ] && [ "$ALB_DNS" != "null" ]; then
                 echo "✅ ALB DNS: $ALB_DNS"
                 break
               else
