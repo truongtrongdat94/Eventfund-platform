@@ -1,0 +1,190 @@
+name: Update CloudFront Origin
+description: Update CloudFront distribution with ALB origin from EKS Ingress
+
+inputs:
+  aws_region:
+    description: 'AWS region'
+    required: true
+  project_name:
+    description: 'Project name for EKS cluster'
+    required: true
+  ingress_group_name:
+    description: 'ALB Ingress group name'
+    required: false
+    default: 'eventfund-shared'
+  origin_id:
+    description: 'CloudFront origin ID'
+    required: false
+    default: 'alb-internal'
+  timeout_minutes:
+    description: 'Timeout in minutes to wait for Ingress'
+    required: false
+    default: '5'
+
+outputs:
+  alb_dns:
+    description: 'ALB DNS name'
+    value: ${{ steps.get-alb.outputs.alb_dns }}
+  cloudfront_distribution_id:
+    description: 'CloudFront distribution ID'
+    value: ${{ steps.get-cf.outputs.distribution_id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Wait for Ingress resources
+      id: get-alb
+      shell: bash
+      run: |
+        echo "Waiting for Ingress resources to be synced by ArgoCD..."
+        
+        TIMEOUT_MINUTES=${{ inputs.timeout_minutes }}
+        MAX_ITERATIONS=$((TIMEOUT_MINUTES * 6))  # Check every 10 seconds
+        
+        for i in $(seq 1 $MAX_ITERATIONS); do
+          # Count Ingress with specified group name
+          INGRESS_COUNT=$(kubectl get ingress -A \
+            -o json 2>/dev/null | jq -r "[.items[] | select(.metadata.annotations.\"alb.ingress.kubernetes.io/group.name\" == \"${{ inputs.ingress_group_name }}\")] | length" || echo "0")
+          
+          if [ "$INGRESS_COUNT" -gt 0 ]; then
+            echo "✅ Found $INGRESS_COUNT Ingress resource(s) with group.name=${{ inputs.ingress_group_name }}"
+            
+            # Get ALB DNS from first Ingress (all Ingress in same group share one ALB)
+            ALB_DNS=$(kubectl get ingress -A \
+              -o json 2>/dev/null | jq -r "[.items[] | select(.metadata.annotations.\"alb.ingress.kubernetes.io/group.name\" == \"${{ inputs.ingress_group_name }}\")] | .[0].status.loadBalancer.ingress[0].hostname" || echo "")
+            
+            if [ -n "$ALB_DNS" ] && [ "$ALB_DNS" != "null" ]; then
+              echo "✅ ALB DNS: $ALB_DNS"
+              echo "alb_dns=$ALB_DNS" >> $GITHUB_OUTPUT
+              exit 0
+            else
+              echo "Ingress exists but ALB not provisioned yet, waiting..."
+            fi
+          else
+            echo "Waiting for ArgoCD to sync Ingress... ($i/$MAX_ITERATIONS)"
+          fi
+          
+          sleep 10
+        done
+
+        echo "❌ Could not get ALB DNS after $TIMEOUT_MINUTES minutes"
+        echo ""
+        echo "Current Ingress resources:"
+        kubectl get ingress -A 2>/dev/null || echo "No Ingress resources found"
+        echo ""
+        echo "You can manually update CloudFront later with:"
+        echo "  kubectl get ingress -A"
+        echo "  ALB_DNS=\$(kubectl get ingress -n eventfund-dev api-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')"
+        exit 1
+
+    - name: Get CloudFront distribution ID
+      id: get-cf
+      shell: bash
+      working-directory: terraform
+      run: |
+        CF_ID=$(terraform output -raw cloudfront_distribution_id 2>/dev/null || echo "")
+        
+        if [ -z "$CF_ID" ]; then
+          echo "❌ Could not get CloudFront distribution ID from Terraform output"
+          exit 1
+        fi
+        
+        echo "distribution_id=$CF_ID" >> $GITHUB_OUTPUT
+        echo "✅ CloudFront distribution ID: $CF_ID"
+
+    - name: Update CloudFront distribution
+      shell: bash
+      run: |
+        CF_ID="${{ steps.get-cf.outputs.distribution_id }}"
+        ALB_DNS="${{ steps.get-alb.outputs.alb_dns }}"
+        ORIGIN_ID="${{ inputs.origin_id }}"
+        
+        # Get current distribution config
+        ETAG=$(aws cloudfront get-distribution-config --id "$CF_ID" --query 'ETag' --output text)
+        aws cloudfront get-distribution-config --id "$CF_ID" \
+          --query 'DistributionConfig' --output json > /tmp/cf-config.json
+
+        # Update config using Python
+        python3 - <<'EOF'
+        import json
+        import os
+        import sys
+
+        with open('/tmp/cf-config.json') as f:
+            config = json.load(f)
+
+        alb_dns = os.environ['ALB_DNS']
+        origin_id = os.environ['ORIGIN_ID']
+
+        # Check if origin already exists
+        existing = [o for o in config['Origins']['Items'] if o['Id'] == origin_id]
+        
+        if not existing:
+            # Add new origin
+            config['Origins']['Items'].append({
+                "Id": origin_id,
+                "DomainName": alb_dns,
+                "CustomOriginConfig": {
+                    "HTTPPort": 80,
+                    "HTTPSPort": 443,
+                    "OriginProtocolPolicy": "http-only",
+                    "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]},
+                    "OriginReadTimeout": 30,
+                    "OriginKeepaliveTimeout": 5
+                },
+                "ConnectionAttempts": 3,
+                "ConnectionTimeout": 10
+            })
+            config['Origins']['Quantity'] = len(config['Origins']['Items'])
+            print(f"✅ Added new origin: {origin_id}")
+        else:
+            # Update existing origin DNS
+            for o in config['Origins']['Items']:
+                if o['Id'] == origin_id:
+                    o['DomainName'] = alb_dns
+            print(f"✅ Updated origin DNS: {origin_id} -> {alb_dns}")
+
+        # Add cache behaviors for /argocd/*, /grafana/*, /api/*
+        behaviors = config.get('CacheBehaviors', {}).get('Items', [])
+        paths_to_add = [
+            ('/argocd/*', origin_id),
+            ('/grafana/*', origin_id),
+            ('/api/*', origin_id)
+        ]
+        
+        for path, target_origin in paths_to_add:
+            if not any(b['PathPattern'] == path for b in behaviors):
+                behaviors.append({
+                    "PathPattern": path,
+                    "TargetOriginId": target_origin,
+                    "ViewerProtocolPolicy": "redirect-to-https",
+                    "AllowedMethods": {
+                        "Quantity": 7,
+                        "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
+                        "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]}
+                    },
+                    "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",  # CachingDisabled
+                    "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",  # AllViewer
+                    "Compress": True
+                })
+                print(f"✅ Added cache behavior: {path}")
+        
+        config['CacheBehaviors'] = {'Quantity': len(behaviors), 'Items': behaviors}
+
+        with open('/tmp/cf-config-updated.json', 'w') as f:
+            json.dump(config, f, indent=2)
+        
+        print("✅ CloudFront config updated")
+        EOF
+        
+        # Apply updated config
+        aws cloudfront update-distribution \
+          --id "$CF_ID" \
+          --distribution-config file:///tmp/cf-config-updated.json \
+          --if-match "$ETAG" \
+          --region us-east-1
+        
+        echo "✅ CloudFront distribution updated with ALB origin: $ALB_DNS"
+      env:
+        ALB_DNS: ${{ steps.get-alb.outputs.alb_dns }}
+        ORIGIN_ID: ${{ inputs.origin_id }}

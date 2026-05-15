@@ -7,8 +7,6 @@ locals {
 }
 
 # ─── GitHub Actions OIDC Provider ────────────────────────────────────────────
-# Tên module đặt rõ "github_oidc" để phân biệt với EKS OIDC provider
-# (EKS tự tạo OIDC provider riêng trong module.eks)
 module "github_oidc" {
   source = "./modules/oidc"
   tags   = local.common_tags

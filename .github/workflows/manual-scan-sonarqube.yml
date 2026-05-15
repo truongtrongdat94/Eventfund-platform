@@ -1,31 +1,14 @@
-name: Manual – SonarQube (New)
+name: Manual – SonarQube Scan
 
 on:
   workflow_dispatch:
-    inputs:
-      upload_to_s3:
-        description: 'Upload reports to S3'
-        type: boolean
-        default: true
-      scan_type:
-        description: 'Scan type'
-        type: choice
-        options:
-          - full
-          - pr-diff
-        default: 'full'
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   sonarqube-scan:
     uses: ./.github/workflows/reusable-scan-sonarqube.yml
-    with:
-      upload_to_s3: ${{ inputs.upload_to_s3 }}
-      scan_type: ${{ inputs.scan_type }}
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}

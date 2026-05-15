@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Configure AWS
         uses: ./.github/actions/setup-aws
@@ -32,8 +34,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Build và load vào local daemon để smoke test dùng ngay
-      # Không push ở bước này — push riêng sau khi test pass
+      # Build image with multiple tags - no need for manual docker tag/push
       - name: Build image
         uses: docker/build-push-action@v5
         with:
@@ -44,10 +45,10 @@ jobs:
           load: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Smoke test dùng image local — không cần pull từ ECR
       - name: Smoke test (/health)
         run: |
           set -euo pipefail
@@ -76,7 +77,7 @@ jobs:
 
           for i in {1..60}; do
             if curl -fsS "http://localhost:4000/health" | jq -e '.ok == true' >/dev/null 2>&1; then
-              echo " Health check passed"
+              echo "✅ Health check passed"
               docker stop backend-test
               exit 0
             fi
@@ -84,27 +85,49 @@ jobs:
             sleep 3
           done
 
-          echo " Health check failed"
+          echo "❌ Health check failed"
           docker logs --tail 100 backend-test
           docker stop backend-test
           exit 1
 
-      # Push lên ECR chỉ khi là push event (không phải PR)
-      # Chạy sau khi smoke test pass
+      # Push with multiple tags using docker/build-push-action
       - name: Push image to ECR
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        run: |
-          IMAGE="${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}"
-          docker tag "${IMAGE}:${{ github.sha }}" "${IMAGE}:latest"
-          docker push "${IMAGE}:${{ github.sha }}"
-          docker push "${IMAGE}:latest"
-          echo " Pushed: ${IMAGE}:${{ github.sha }}"
-          echo " Pushed: ${IMAGE}:latest"
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          target: production
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:latest
+          cache-from: type=gha
+
+      # Add Trivy DB cache for faster scans
+      - name: Cache Trivy DB
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/dev'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ github.run_id }}
+          restore-keys: |
+            trivy-db-
+
+      # Add Trivy DB cache for faster scans
+      - name: Cache Trivy DB
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/dev'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/trivy
+          key: trivy-db-${{ github.run_id }}
+          restore-keys: |
+            trivy-db-
 
       # Trivy scan — chạy trên image local, không cần pull từ ECR
       - name: Run Trivy security scan
         if: github.event_name == 'pull_request' || github.ref == 'refs/heads/dev'
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:${{ github.sha }}
           format: sarif

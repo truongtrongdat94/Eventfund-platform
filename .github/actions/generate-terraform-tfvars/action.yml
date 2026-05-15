@@ -1,0 +1,103 @@
+name: Generate Terraform tfvars
+description: Generate terraform.auto.tfvars.json from config outputs
+
+inputs:
+  aws_region:
+    description: 'AWS region'
+    required: true
+  project_name:
+    description: 'Project name'
+    required: true
+  environment:
+    description: 'Environment'
+    required: true
+  vpc_cidr:
+    description: 'VPC CIDR'
+    required: true
+  public_subnets_cidr:
+    description: 'Public subnets CIDR (JSON array)'
+    required: true
+  private_subnets_cidr:
+    description: 'Private subnets CIDR (JSON array)'
+    required: true
+  azs:
+    description: 'Availability zones (JSON array)'
+    required: true
+  eks_version:
+    description: 'EKS version'
+    required: true
+  node_instance_type:
+    description: 'Node instance type'
+    required: true
+  node_desired_capacity:
+    description: 'Node desired capacity'
+    required: true
+  node_min_capacity:
+    description: 'Node min capacity'
+    required: true
+  node_max_capacity:
+    description: 'Node max capacity'
+    required: true
+  ecr_backend_repository:
+    description: 'ECR backend repository'
+    required: true
+  github_actions_role_name:
+    description: 'GitHub Actions role name'
+    required: true
+  github_repository:
+    description: 'GitHub repository'
+    required: true
+  s3_security_reports_bucket:
+    description: 'S3 security reports bucket'
+    required: true
+  security_reports_retention_days:
+    description: 'Security reports retention days'
+    required: true
+  argocd_repo_url:
+    description: 'ArgoCD repo URL'
+    required: true
+  argocd_target_revision:
+    description: 'ArgoCD target revision'
+    required: true
+  argocd_app_namespace:
+    description: 'ArgoCD app namespace'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Generate terraform.auto.tfvars.json
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          
+          const tfvars = {
+            region: "${{ inputs.aws_region }}",
+            project_name: "${{ inputs.project_name }}",
+            environment: "${{ inputs.environment }}",
+            vpc_cidr: "${{ inputs.vpc_cidr }}",
+            public_subnets_cidr: ${{ inputs.public_subnets_cidr }},
+            private_subnets_cidr: ${{ inputs.private_subnets_cidr }},
+            azs: ${{ inputs.azs }},
+            eks_version: "${{ inputs.eks_version }}",
+            node_group_instance_types: ["${{ inputs.node_instance_type }}"],
+            node_desired_capacity: ${{ inputs.node_desired_capacity }},
+            node_min_capacity: ${{ inputs.node_min_capacity }},
+            node_max_capacity: ${{ inputs.node_max_capacity }},
+            node_capacity_type: "SPOT",
+            ecr_backend_repo: "${{ inputs.ecr_backend_repository }}",
+            ssm_prefix: "/${{ inputs.project_name }}/${{ inputs.environment }}/backend",
+            github_actions_role_name: "${{ inputs.github_actions_role_name }}",
+            github_repos: ["repo:${{ inputs.github_repository }}:*"],
+            security_reports_bucket: "${{ inputs.s3_security_reports_bucket }}",
+            security_reports_retention_days: ${{ inputs.security_reports_retention_days }},
+            argocd_repo_url: "${{ inputs.argocd_repo_url }}",
+            argocd_target_revision: "${{ inputs.argocd_target_revision }}",
+            argocd_app_namespace: "${{ inputs.argocd_app_namespace }}"
+          };
+          
+          const filePath = path.join(process.env.GITHUB_WORKSPACE, 'terraform', 'terraform.auto.tfvars.json');
+          fs.writeFileSync(filePath, JSON.stringify(tfvars, null, 2));
+          console.log('✅ Generated terraform.auto.tfvars.json with', Object.keys(tfvars).length, 'variables');

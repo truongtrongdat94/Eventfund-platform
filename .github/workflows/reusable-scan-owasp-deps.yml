@@ -3,79 +3,64 @@ name: Reusable – OWASP Dependency-Check
 on:
   workflow_call:
     inputs:
-      upload_to_s3:
-        description: 'Upload reports to S3'
-        type: boolean
-        default: true
       path:
         description: 'Path to scan (default: entire project)'
         type: string
         default: '.'
-    secrets:
-      AWS_ACCOUNT_ID:
-        required: false
 
 jobs:
   owasp-scan:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write  # Required for uploading SARIF to Security tab
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for better analysis
+          persist-credentials: false
 
-      # Load configuration
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
-
-      # Generate scan metadata
-      - name: Generate scan metadata
-        id: metadata
-        uses: ./.github/actions/generate-scan-metadata
+      # Cache OWASP NVD database to speed up scans
+      # Cache key based on OS + dependency files for reusability
+      # NVD database updates independently, but cache is still beneficial
+      - name: Cache OWASP NVD database
+        uses: actions/cache@v4
         with:
-          tool: owasp-dependency-check
+          path: ~/.gradle/dependency-check-data
+          key: owasp-nvd-${{ runner.os }}-${{ hashFiles('**/pom.xml', '**/package-lock.json', '**/yarn.lock', '**/Gemfile.lock') }}
+          restore-keys: |
+            owasp-nvd-${{ runner.os }}-
 
       # Run OWASP Dependency-Check
+      # Generates SARIF for GitHub Security tab
       - name: Run OWASP Dependency-Check
-        uses: dependency-check/Dependency-Check_Action@main
+        uses: dependency-check/Dependency-Check_Action@1.1.0
         with:
           project: 'eventfund-platform'
           path: ${{ inputs.path }}
-          format: 'HTML'
+          format: 'SARIF'
           out: 'reports'
           args: >
-            --format SARIF
+            --failOnCVSS 7
             --exclude "**/node_modules/**"
             --exclude "**/dist/**"
             --exclude "**/build/**"
             --exclude "**/coverage/**"
 
-      # Copy metadata to reports folder
-      - name: Copy metadata to reports
-        if: always()
-        shell: bash
-        run: |
-          chmod -R 777 reports/
-          cp metadata.json reports/
-          echo " Copied metadata.json to reports/"
-
-      # Configure AWS (if uploading to S3)
-      - name: Configure AWS
-        if: always() && inputs.upload_to_s3
-        uses: ./.github/actions/setup-aws
+      # Upload SARIF to GitHub Security tab
+      - name: Upload SARIF to GitHub Security
+        if: always() && hashFiles('reports/*.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
         with:
-          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          sarif_file: reports/dependency-check-report.sarif
+          category: owasp-dependency-check
 
-      # Upload reports
-      - name: Upload reports
+      # Upload reports as GitHub Artifacts
+      - name: Upload reports artifact
         if: always()
-        uses: ./.github/actions/upload-security-reports
+        uses: actions/upload-artifact@v4
         with:
-          scan_id: ${{ steps.metadata.outputs.scan_id }}
-          tool: owasp-dependency-check
-          reports_path: reports
-          s3_path: ${{ steps.metadata.outputs.s3_path }}
-          retention_days: 30
-          upload_to_s3: ${{ inputs.upload_to_s3 }}
+          name: owasp-dependency-check-reports-${{ github.run_id }}
+          path: reports/
+          retention-days: 30

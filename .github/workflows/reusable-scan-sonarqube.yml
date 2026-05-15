@@ -1,26 +1,11 @@
-name: Reusable – SonarQube
+name: Reusable – SonarQube Scan
 
 on:
   workflow_call:
-    inputs:
-      upload_to_s3:
-        description: 'Upload reports to S3'
-        type: boolean
-        default: true
-      scan_type:
-        description: 'Scan type: full or pr-diff'
-        type: string
-        default: 'full'
-      pr_number:
-        description: 'Pull request number (used to filter artifact report for PR scans)'
-        type: string
-        default: ''
     secrets:
       SONAR_TOKEN:
         required: true
       SONAR_HOST_URL:
-        required: false
-      AWS_ACCOUNT_ID:
         required: false
 
 jobs:
@@ -31,22 +16,15 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for better analysis
+          fetch-depth: 0  
+          persist-credentials: false
 
-      # Load configuration
       - name: Load config
         id: config
         uses: ./.github/actions/load-config
 
-      # Generate scan metadata
-      - name: Generate scan metadata
-        id: metadata
-        uses: ./.github/actions/generate-scan-metadata
-        with:
-          tool: sonarqube
-
-      # Determine SonarCloud URL
-      - name: Set SonarCloud URL
+      # Determine Sonar server URL
+      - name: Set Sonar server URL
         id: sonar_url
         shell: bash
         run: |
@@ -55,203 +33,38 @@ jobs:
             URL="${{ steps.config.outputs.sonarcloud_base_url }}"
           fi
           echo "url=${URL}" >> $GITHUB_OUTPUT
-          echo "SonarCloud URL: ${URL}"
+          echo "Sonar server URL: ${URL}"
 
-      # Run SonarQube Scan (Full)
-      - name: SonarQube Scan (Full Project)
-        if: inputs.scan_type == 'full'
+      # Run SonarQube Scan (unified action for both full and PR)
+      - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v7.1.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ steps.sonar_url.outputs.url }}
-        with:
-          args: >
-            -Dsonar.projectKey=${{ steps.config.outputs.sonarcloud_project_key }}
-            -Dsonar.organization=${{ steps.config.outputs.sonarcloud_organization }}
-            -Dsonar.sources=backend/src,frontend/src
-            -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/coverage/**
-
-      # Run SonarQube Scan (PR Diff)
-      - name: SonarQube Scan (PR Diff Only)
-        if: inputs.scan_type == 'pr-diff' && github.event_name == 'pull_request'
-        uses: SonarSource/sonarcloud-github-action@master
-        env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
             -Dsonar.projectKey=${{ steps.config.outputs.sonarcloud_project_key }}
             -Dsonar.organization=${{ steps.config.outputs.sonarcloud_organization }}
             -Dsonar.sources=backend/src,frontend/src
             -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/coverage/**
-            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
-            -Dsonar.pullrequest.branch=${{ github.head_ref }}
-            -Dsonar.pullrequest.base=${{ github.base_ref }}
+            ${{ github.event_name == 'pull_request' && format('-Dsonar.pullrequest.key={0} -Dsonar.pullrequest.branch={1} -Dsonar.pullrequest.base={2}', github.event.pull_request.number, github.head_ref, github.base_ref) || '' }}
 
-      # Export SonarCloud reports
-      - name: Export SonarCloud reports
-        if: always()
-        shell: bash
+      # Quality gate check (only after successful scan)
+      - name: SonarQube Quality Gate check
+        uses: SonarSource/sonarqube-quality-gate-action@v1.1.0
+        timeout-minutes: 5
+        with:
+          pollingTimeoutSec: 300
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: |
-          set -euo pipefail
+          SONAR_HOST_URL: ${{ steps.sonar_url.outputs.url }}
 
-          PROJECT_KEY="${{ steps.config.outputs.sonarcloud_project_key }}"
-          BASE_URL="${{ steps.sonar_url.outputs.url }}"
-          PR_NUMBER="${{ inputs.pr_number }}"
-          OUT="sonar-reports"
-          mkdir -p $OUT
-
-          echo "Fetching SonarCloud data..."
-
-          # Build PR filter params if pr_number is provided
-          if [ -n "$PR_NUMBER" ]; then
-            echo "🔍 Filtering by PR #${PR_NUMBER}"
-            PR_FILTER_ISSUES="&pullRequest=${PR_NUMBER}"
-            PR_FILTER_HOTSPOTS="&pullRequest=${PR_NUMBER}"
-            PR_FILTER_QG="&pullRequest=${PR_NUMBER}"
-          else
-            PR_FILTER_ISSUES=""
-            PR_FILTER_HOTSPOTS=""
-            PR_FILTER_QG=""
-          fi
-
-          # Issues (bugs, vulnerabilities, code smells)
-          curl -sf -u "$SONAR_TOKEN:" \
-            "$BASE_URL/api/issues/search?projectKeys=$PROJECT_KEY&ps=500&resolved=false${PR_FILTER_ISSUES}" \
-            -o $OUT/issues.json || echo "Failed to fetch issues"
-
-          # Measures (metrics) — always full project, no PR filter available
-          curl -sf -u "$SONAR_TOKEN:" \
-            "$BASE_URL/api/measures/component?component=$PROJECT_KEY&metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc,security_hotspots,reliability_rating,security_rating,sqale_rating,sqale_index,alert_status" \
-            -o $OUT/measures.json || echo "Failed to fetch measures"
-
-          # Security hotspots
-          curl -sf -u "$SONAR_TOKEN:" \
-            "$BASE_URL/api/hotspots/search?projectKey=$PROJECT_KEY&ps=500${PR_FILTER_HOTSPOTS}" \
-            -o $OUT/hotspots.json || echo "Failed to fetch hotspots"
-
-          # Quality Gate status
-          curl -sf -u "$SONAR_TOKEN:" \
-            "$BASE_URL/api/qualitygates/project_status?projectKey=$PROJECT_KEY${PR_FILTER_QG}" \
-            -o $OUT/quality-gate.json || echo "Failed to fetch quality gate"
-
-          echo "Exported SonarCloud reports"
-
-      # Generate HTML report
-      - name: Generate HTML report
+      # Upload scan metadata as artifact for debugging
+      - name: Upload scan metadata
         if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          OUT="sonar-reports"
-
-          # Read JSON files and escape for embedding
-          QUALITY_GATE_DATA=$(cat $OUT/quality-gate.json 2>/dev/null || echo '{"error": "Failed to load quality gate data"}')
-          MEASURES_DATA=$(cat $OUT/measures.json 2>/dev/null || echo '{"error": "Failed to load measures data"}')
-          ISSUES_DATA=$(cat $OUT/issues.json 2>/dev/null || echo '{"error": "Failed to load issues data"}')
-          HOTSPOTS_DATA=$(cat $OUT/hotspots.json 2>/dev/null || echo '{"error": "Failed to load hotspots data"}')
-
-          # Generate HTML with embedded JSON data
-          cat > $OUT/report.html <<EOF
-          <!DOCTYPE html>
-          <html lang="en">
-          <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>SonarCloud Report – eventfund-platform</title>
-            <style>
-              * { margin: 0; padding: 0; box-sizing: border-box; }
-              body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 2rem; background: #f5f7fa; line-height: 1.6; }
-              .container { max-width: 1200px; margin: 0 auto; }
-              h1 { color: #1a1a1a; margin-bottom: 0.5rem; }
-              .meta { color: #666; margin-bottom: 2rem; font-size: 0.9rem; }
-              .meta strong { color: #333; }
-              .link { display: inline-block; margin-bottom: 2rem; padding: 0.7rem 1.5rem; background: #0066cc; color: white; text-decoration: none; border-radius: 6px; font-weight: 500; transition: background 0.2s; }
-              .link:hover { background: #0052a3; }
-              .section { background: white; padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-              h2 { color: #1a1a1a; margin-bottom: 1rem; font-size: 1.3rem; border-bottom: 2px solid #0066cc; padding-bottom: 0.5rem; }
-              pre { background: #f8f9fa; padding: 1rem; border-radius: 6px; overflow: auto; border: 1px solid #e1e4e8; font-size: 0.85rem; font-family: 'Courier New', monospace; max-height: 400px; }
-              .error { color: #dc3545; }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-              <h1>🔍 SonarCloud Security Report</h1>
-              <p class="meta">
-                <strong>Project:</strong> eventfund-platform &nbsp;|&nbsp;
-                <strong>Scan ID:</strong> ${{ steps.metadata.outputs.scan_id }} &nbsp;|&nbsp;
-                <strong>Branch:</strong> ${{ steps.metadata.outputs.branch_name }} &nbsp;|&nbsp;
-                <strong>Commit:</strong> ${{ steps.metadata.outputs.short_sha }} &nbsp;|&nbsp;
-                <strong>Date:</strong> ${{ steps.metadata.outputs.timestamp }}
-              </p>
-              <a class="link" href="${{ steps.sonar_url.outputs.url }}/project/overview?id=${{ steps.config.outputs.sonarcloud_project_key }}" target="_blank">View on SonarCloud ↗</a>
-
-              <div class="section">
-                <h2>Quality Gate Status</h2>
-                <pre id="quality-gate"></pre>
-              </div>
-
-              <div class="section">
-                <h2>📊 Quality Metrics</h2>
-                <pre id="measures"></pre>
-              </div>
-
-              <div class="section">
-                <h2>🐛 Issues (Bugs, Vulnerabilities, Code Smells)</h2>
-                <pre id="issues"></pre>
-              </div>
-
-              <div class="section">
-                <h2>🔥 Security Hotspots</h2>
-                <pre id="hotspots"></pre>
-              </div>
-            </div>
-
-            <script>
-              // Embedded JSON data
-              const qualityGateData = ${QUALITY_GATE_DATA};
-              const measuresData = ${MEASURES_DATA};
-              const issuesData = ${ISSUES_DATA};
-              const hotspotsData = ${HOTSPOTS_DATA};
-
-              // Display data
-              document.getElementById('quality-gate').textContent = JSON.stringify(qualityGateData, null, 2);
-              document.getElementById('measures').textContent = JSON.stringify(measuresData, null, 2);
-              document.getElementById('issues').textContent = JSON.stringify(issuesData, null, 2);
-              document.getElementById('hotspots').textContent = JSON.stringify(hotspotsData, null, 2);
-            </script>
-          </body>
-          </html>
-          EOF
-
-          echo "Generated HTML report with embedded data"
-
-      # Copy metadata to reports folder
-      - name: Copy metadata to reports
-        if: always()
-        shell: bash
-        run: |
-          cp metadata.json sonar-reports/
-          echo "Copied metadata.json to sonar-reports/"
-
-      # Configure AWS (if uploading to S3)
-      - name: Configure AWS
-        if: always() && inputs.upload_to_s3
-        uses: ./.github/actions/setup-aws
+        uses: actions/upload-artifact@v4
         with:
-          aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
-
-      # Upload reports
-      - name: Upload reports
-        if: always()
-        uses: ./.github/actions/upload-security-reports
-        with:
-          scan_id: ${{ steps.metadata.outputs.scan_id }}
-          tool: sonarqube
-          reports_path: sonar-reports
-          s3_path: ${{ steps.metadata.outputs.s3_path }}
-          retention_days: 30
-          upload_to_s3: ${{ inputs.upload_to_s3 }}
+          name: sonarqube-scan-metadata-${{ github.run_id }}
+          path: .scannerwork/
+          retention-days: 7

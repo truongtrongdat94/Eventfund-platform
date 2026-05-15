@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Load config
         id: config
@@ -58,31 +60,38 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      # Use S3 sync action with optimizations
       - name: Upload to S3
-        run: |
-          aws s3 sync frontend/dist/ s3://${{ steps.config.outputs.frontend_s3_bucket }} \
-            --delete \
-            --region ${{ steps.config.outputs.aws_region }}
+        uses: jakejarvis/s3-sync-action@v0.5.1
+        with:
+          args: --follow-symlinks --delete --cache-control "public,max-age=31536000,immutable"
+        env:
+          AWS_S3_BUCKET: ${{ steps.config.outputs.frontend_s3_bucket }}
+          AWS_REGION: ${{ steps.config.outputs.aws_region }}
+          SOURCE_DIR: frontend/dist
 
-      - name: Invalidate CloudFront cache
+      # Get CloudFront distribution ID by querying S3 bucket origin
+      - name: Get CloudFront distribution ID
+        id: cloudfront
+        shell: bash
         run: |
-          # Auto-query CloudFront distribution ID by S3 bucket origin
           BUCKET="${{ steps.config.outputs.frontend_s3_bucket }}"
-          REGION="${{ steps.config.outputs.aws_region }}"
-
-          # Query tất cả distributions và filter bằng jq để tìm origin chứa bucket name
           DIST_ID=$(aws cloudfront list-distributions --output json | \
             jq -r ".DistributionList.Items[] | select(.Origins.Items[].DomainName | contains(\"${BUCKET}\")) | .Id" | \
             head -n 1)
-
+          
           if [ -z "$DIST_ID" ]; then
-            echo " CloudFront distribution not found for bucket: ${BUCKET}"
-            echo "Available distributions:"
-            aws cloudfront list-distributions --query "DistributionList.Items[].{Id:Id, Origins:Origins.Items[*].DomainName}" --output json
+            echo "❌ CloudFront distribution not found for bucket: ${BUCKET}"
             exit 1
           fi
+          
+          echo "distribution_id=${DIST_ID}" >> $GITHUB_OUTPUT
+          echo "✅ Found distribution: ${DIST_ID}"
 
-          echo " Found distribution: $DIST_ID"
-          aws cloudfront create-invalidation \
-            --distribution-id "$DIST_ID" \
-            --paths "/*"
+      # Use CloudFront invalidation action
+      - name: Invalidate CloudFront cache
+        uses: chetan/invalidate-cloudfront-action@v2
+        env:
+          DISTRIBUTION: ${{ steps.cloudfront.outputs.distribution_id }}
+          PATHS: "/*"
+          AWS_REGION: ${{ steps.config.outputs.aws_region }}

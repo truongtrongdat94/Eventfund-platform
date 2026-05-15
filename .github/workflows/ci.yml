@@ -6,11 +6,23 @@ on:
     paths:
       - 'backend/**'
       - 'frontend/**'
+      - 'contracts/**'
+      - '.github/actions/**'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/reusable-*.yml'
+      - 'package-lock.json'
+      - 'docker-compose.yml'
   pull_request:
     branches: [dev, master, ci/cd]
     paths:
       - 'backend/**'
       - 'frontend/**'
+      - 'contracts/**'
+      - '.github/actions/**'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/reusable-*.yml'
+      - 'package-lock.json'
+      - 'docker-compose.yml'
   workflow_dispatch:
 
 concurrency:
@@ -22,10 +34,14 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      backend:  ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
+      backend:   ${{ steps.filter.outputs.backend }}
+      frontend:  ${{ steps.filter.outputs.frontend }}
+      contracts: ${{ steps.filter.outputs.contracts }}
+      shared:    ${{ steps.filter.outputs.shared }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -34,10 +50,18 @@ jobs:
               - 'backend/**'
             frontend:
               - 'frontend/**'
+            contracts:
+              - 'contracts/**'
+            shared:
+              - '.github/actions/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/reusable-*.yml'
+              - 'package-lock.json'
+              - 'docker-compose.yml'
 
   frontend:
     needs: changes
-    if: needs.changes.outputs.frontend == 'true'
+    if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.shared == 'true'
     uses: ./.github/workflows/reusable-build-frontend.yml
     permissions:
       contents: read
@@ -46,11 +70,13 @@ jobs:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
 
   contracts:
+    needs: changes
+    if: needs.changes.outputs.contracts == 'true' || needs.changes.outputs.shared == 'true'
     uses: ./.github/workflows/reusable-build-contracts.yml
 
   backend:
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.shared == 'true'
     uses: ./.github/workflows/reusable-build-backend.yml
     permissions:
       contents: read
@@ -62,12 +88,11 @@ jobs:
 
   sonarcloud:
     needs: changes
-    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true'
+    if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.shared == 'true'
     uses: ./.github/workflows/reusable-scan-sonarqube.yml
-    with:
-      upload_to_s3: false
-      scan_type: pr-diff
-      pr_number: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || '' }}
+    permissions:
+      contents: read
+      actions: read
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
