@@ -127,7 +127,7 @@ jobs:
       # Trivy scan — chạy trên image local, không cần pull từ ECR
       - name: Run Trivy security scan
         if: github.event_name == 'pull_request' || github.ref == 'refs/heads/dev'
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:${{ github.sha }}
           format: sarif
