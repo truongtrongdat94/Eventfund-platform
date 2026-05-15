@@ -54,8 +54,6 @@ jobs:
       - name: SonarQube Quality Gate check
         uses: SonarSource/sonarqube-quality-gate-action@v1.1.0
         timeout-minutes: 5
-        with:
-          pollingTimeoutSec: 300
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ steps.sonar_url.outputs.url }}
