@@ -5,13 +5,12 @@ aws:
   account_id_secret: AWS_ACCOUNT_ID  
   github_actions_role_name: GitHubActionsRole
   github_repos:
-    - "repo:kieuphat159/Eventfund-platform:*"
+    - "repo:truongtrongdat94/Eventfund-platform:*"
 
 project:
   name: eventfund
-  environment: dev  # Default environment for workflows
+  environment: dev  
 
-# Environment-specific configs
 environments:
   dev:
     namespace: eventfund-dev
@@ -74,7 +73,7 @@ cloudfront:
   distribution_id: E1PCRG3NRMTP33  # Default dev (deprecated, will be auto-detected from S3 bucket)
 
 argocd:
-  repo_url: https://github.com/kieuphat159/Eventfund-platform.git
+  repo_url: https://github.com/truongtrongdat94/Eventfund-platform.git
   target_revision: dev  # Default branch
   app_namespace: eventfund-dev  # Default namespace
 

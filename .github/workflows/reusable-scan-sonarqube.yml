@@ -4,48 +4,77 @@ on:
   workflow_call:
     inputs:
       branch:
-        description: 'Branch name for conditional quality gate check'
+        description: 'Branch name for branch analysis (used when not a pull_request event).'
         type: string
         required: false
         default: ''
-      scan_mode:
-        description: 'Scan mode: pr (changed files only) or full (entire project)'
-        type: string
-        required: false
-        default: 'pr'
     secrets:
       SONAR_TOKEN:
         required: true
       SONAR_HOST_URL:
         required: false
 
+permissions:
+  contents: read
+  pull-requests: read
+
+# Scan-mode is auto-detected here from the triggering event — callers don't need to pass it.
+# - pull_request event → PR decoration mode (uses pull_request.number for sonar.pullrequest.key)
+# - any other event (push, workflow_dispatch) → branch analysis mode
+#
+# Quality gate enforcement:
+# - Runs for pull_request and workflow_dispatch events.
+# - Skipped for push events (merge commit on dev/master) so a failing gate cannot block the
+#   downstream CD deploy. The PR scan was the gate; the merge commit is just record-keeping.
+
 jobs:
   sonarqube-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Load config
         id: config
         uses: ./.github/actions/load-config
 
-      # Determine Sonar server URL
       - name: Set Sonar server URL
         id: sonar_url
-        shell: bash
         run: |
           URL="${{ secrets.SONAR_HOST_URL }}"
           if [ -z "$URL" ]; then
             URL="${{ steps.config.outputs.sonarcloud_base_url }}"
           fi
-          echo "url=${URL}" >> $GITHUB_OUTPUT
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
 
-      # Run SonarQube Scan
+      - name: Build SonarQube args
+        id: sonar_args
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BRANCH_NAME: ${{ inputs.branch }}
+          PROJECT_KEY: ${{ steps.config.outputs.sonarcloud_project_key }}
+          ORGANIZATION: ${{ steps.config.outputs.sonarcloud_organization }}
+        run: |
+          set -euo pipefail
+
+          ARGS="-Dsonar.projectKey=${PROJECT_KEY} -Dsonar.organization=${ORGANIZATION} -Dsonar.sources=backend/src,frontend/src -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/coverage/**"
+
+          if [ "${EVENT_NAME}" = "pull_request" ] && [ -n "${PR_NUMBER}" ]; then
+            ARGS="${ARGS} -Dsonar.pullrequest.key=${PR_NUMBER} -Dsonar.pullrequest.branch=${PR_HEAD_REF} -Dsonar.pullrequest.base=${PR_BASE_REF}"
+          elif [ -n "${BRANCH_NAME}" ]; then
+            ARGS="${ARGS} -Dsonar.branch.name=${BRANCH_NAME}"
+          fi
+
+          echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
+
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v7.1.0
         env:
@@ -53,23 +82,18 @@ jobs:
           SONAR_HOST_URL: ${{ steps.sonar_url.outputs.url }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: >
-            -Dsonar.projectKey=${{ steps.config.outputs.sonarcloud_project_key }}
-            -Dsonar.organization=${{ steps.config.outputs.sonarcloud_organization }}
-            -Dsonar.sources=backend/src,frontend/src
-            -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/coverage/**
-            ${{ inputs.scan_mode == 'pr' && format('-Dsonar.pullrequest.key={0} -Dsonar.pullrequest.branch={1} -Dsonar.pullrequest.base={2}', github.run_number, github.ref_name, github.event.repository.default_branch) || '' }}
+          args: ${{ steps.sonar_args.outputs.args }}
 
-      # Quality gate check (only on master branch with full scan)
+      # Skip quality gate on push events (merge commits on dev/master). PRs and manual
+      # scans still enforce the gate.
       - name: SonarQube Quality Gate check
-        if: inputs.branch == 'master' && inputs.scan_mode == 'full'
+        if: github.event_name != 'push'
         uses: SonarSource/sonarqube-quality-gate-action@v1.1.0
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ steps.sonar_url.outputs.url }}
 
-      # Upload scan metadata as artifact for debugging
       - name: Upload scan metadata
         if: always()
         uses: actions/upload-artifact@v4

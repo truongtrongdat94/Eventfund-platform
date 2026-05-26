@@ -4,37 +4,40 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: 'Environment (dev or prod)'
+        description: 'Environment (dev or prod) — selects which SSM prefix to fetch VITE_* env from.'
         type: string
         default: 'dev'
     secrets:
       AWS_ACCOUNT_ID:
         required: true
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      # Load config
       - name: Load config
         id: config
         uses: ./.github/actions/load-config
         with:
           environment: ${{ inputs.environment }}
 
-      # Setup AWS (OIDC) - để pull từ SSM
       - name: Configure AWS
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
 
-      # Pull VITE_* env từ SSM
       - name: Pull frontend env from AWS SSM
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -42,25 +45,18 @@ jobs:
           SSM_PREFIX="/eventfund/${ENVIRONMENT}/frontend"
           ENV_FILE="frontend/.env"
 
-          echo "📥 Pulling frontend env from: $SSM_PREFIX"
+          # Truncate any pre-existing .env to avoid stale values bleeding in.
+          : > "$ENV_FILE"
 
-          # Fetch tất cả params từ prefix
           aws ssm get-parameters-by-path \
             --path "$SSM_PREFIX" \
             --recursive \
             --with-decryption \
-            --region ${{ steps.config.outputs.aws_region }} \
+            --region "${{ steps.config.outputs.aws_region }}" \
             --query 'Parameters[*].[Name,Value]' \
             --output json | \
-          jq -r '.[] | "\(.[0])=\(.[1])"' | \
-          while IFS='=' read -r name value; do
-            # Extract key từ path: /eventfund/dev/frontend/VITE_API_BASE_URL → VITE_API_BASE_URL
-            KEY=$(echo "$name" | sed "s|^$SSM_PREFIX/||")
-            echo "${KEY}=${value}" >> "$ENV_FILE"
-            echo "✅ Loaded: $KEY"
-          done
-
-          echo "✅ Frontend env loaded"
+          jq -r --arg prefix "$SSM_PREFIX/" '.[] | (.[0] | sub("^" + $prefix; "")) + "=" + .[1]' \
+            >> "$ENV_FILE"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -76,3 +72,19 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+      # Wipe the .env that contained SSM-fetched secrets so it can't end up in the artifact.
+      - name: Cleanup env file before artifact upload
+        if: always()
+        run: rm -f frontend/.env
+
+      # Persist dist/ so the CD deploy job can pull the exact same build instead of rebuilding.
+      # Only upload on events that will trigger a downstream CD run.
+      - name: Upload dist artifact for CD
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist-${{ github.sha }}
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 7

@@ -2,6 +2,11 @@ name: Reusable – Deploy Contracts (Sepolia)
 
 on:
   workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment (dev or prod) — determines SSM path prefix.'
+        type: string
+        default: 'dev'
     secrets:
       AWS_ACCOUNT_ID:
         required: true
@@ -14,18 +19,27 @@ on:
       DEPLOY_CONFIRMATIONS:
         required: false
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      # Load config
       - name: Load config
         id: config
         uses: ./.github/actions/load-config
+        with:
+          environment: ${{ inputs.environment }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -37,70 +51,54 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefix contracts
 
-      # Setup AWS (OIDC) - để update Parameter Store
       - name: Configure AWS
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
 
-      # Deploy contracts và update Parameter Store
       - name: Deploy to Sepolia and update AWS Parameter Store
         env:
           SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           ROYALTY_BPS: ${{ secrets.ROYALTY_BPS }}
           DEPLOY_CONFIRMATIONS: ${{ secrets.DEPLOY_CONFIRMATIONS }}
+          ENVIRONMENT: ${{ steps.config.outputs.environment }}
+          AWS_REGION: ${{ steps.config.outputs.aws_region }}
         run: |
           set -euo pipefail
 
-          echo "Deploying contracts to Sepolia..."
+          echo "Deploying contracts to Sepolia for env: ${ENVIRONMENT}"
           DEPLOY_OUTPUT=$(npm run --prefix contracts deploy:sepolia 2>&1)
           echo "$DEPLOY_OUTPUT"
 
-          # Extract contract addresses
           TICKET_ADDRESS=$(echo "$DEPLOY_OUTPUT" | grep -oP 'TICKET_ADDRESS=\K0x[a-fA-F0-9]{40}' | head -1)
           FUND_ADDRESS=$(echo "$DEPLOY_OUTPUT" | grep -oP 'FUND_ADDRESS=\K0x[a-fA-F0-9]{40}' | head -1)
           MARKETPLACE_ADDRESS=$(echo "$DEPLOY_OUTPUT" | grep -oP 'MARKETPLACE_ADDRESS=\K0x[a-fA-F0-9]{40}' | head -1)
 
-          echo ""
-          echo "Extracted addresses:"
-          echo "  TICKET_ADDRESS: $TICKET_ADDRESS"
-          echo "  FUND_ADDRESS: $FUND_ADDRESS"
-          echo "  MARKETPLACE_ADDRESS: $MARKETPLACE_ADDRESS"
-
-          # Validate
           if [ -z "$TICKET_ADDRESS" ] || [ -z "$FUND_ADDRESS" ] || [ -z "$MARKETPLACE_ADDRESS" ]; then
-            echo " Failed to extract contract addresses"
+            echo "Failed to extract contract addresses from deploy output"
             exit 1
           fi
 
-          # Update AWS Parameter Store
-          echo ""
-          echo "Updating AWS Parameter Store..."
+          echo "Extracted addresses:"
+          echo "  TICKET_ADDRESS:      $TICKET_ADDRESS"
+          echo "  FUND_ADDRESS:        $FUND_ADDRESS"
+          echo "  MARKETPLACE_ADDRESS: $MARKETPLACE_ADDRESS"
 
-          aws ssm put-parameter \
-            --name "/eventfund/dev/TICKET_ADDRESS" \
-            --value "$TICKET_ADDRESS" \
-            --type "SecureString" \
-            --overwrite \
-            --region ${{ steps.config.outputs.aws_region }}
-          echo " Updated TICKET_ADDRESS"
+          put_param() {
+            local name="$1"
+            local value="$2"
+            aws ssm put-parameter \
+              --name "/eventfund/${ENVIRONMENT}/${name}" \
+              --value "$value" \
+              --type "SecureString" \
+              --overwrite \
+              --region "${AWS_REGION}"
+            echo "Updated /eventfund/${ENVIRONMENT}/${name}"
+          }
 
-          aws ssm put-parameter \
-            --name "/eventfund/dev/FUND_ADDRESS" \
-            --value "$FUND_ADDRESS" \
-            --type "SecureString" \
-            --overwrite \
-            --region ${{ steps.config.outputs.aws_region }}
-          echo " Updated FUND_ADDRESS"
+          put_param TICKET_ADDRESS      "$TICKET_ADDRESS"
+          put_param FUND_ADDRESS        "$FUND_ADDRESS"
+          put_param MARKETPLACE_ADDRESS "$MARKETPLACE_ADDRESS"
 
-          aws ssm put-parameter \
-            --name "/eventfund/dev/MARKETPLACE_ADDRESS" \
-            --value "$MARKETPLACE_ADDRESS" \
-            --type "SecureString" \
-            --overwrite \
-            --region ${{ steps.config.outputs.aws_region }}
-          echo " Updated MARKETPLACE_ADDRESS"
-
-          echo ""
-          echo " All contract addresses updated in AWS Parameter Store"
+          echo "All contract addresses updated in AWS Parameter Store for env: ${ENVIRONMENT}"

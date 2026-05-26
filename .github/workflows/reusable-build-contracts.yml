@@ -3,15 +3,20 @@ name: Reusable – Contracts
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
   contracts:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      # Load config để lấy node version
       - name: Load config
         id: config
         uses: ./.github/actions/load-config

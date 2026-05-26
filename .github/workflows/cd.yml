@@ -1,65 +1,61 @@
 name: CD
 
+# IMPORTANT: workflow_run executes from the DEFAULT branch (master), not from the
+# branch that triggered CI. Changes to this file on feature branches won't take
+# effect until merged into master. Edits live-tested only via the master branch.
 on:
-  # Trigger sau khi CI pass trên main
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [master, dev]
 
+permissions:
+  contents: read
+
+# Group by triggering branch so dev/prod deploys don't block each other.
+# (github.ref is always default branch in workflow_run context — DO NOT use it here.)
 concurrency:
-  group: cd-${{ github.ref }}
-  cancel-in-progress: false  # Không cancel deploy đang chạy
+  group: cd-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
 
 jobs:
-  # Kiểm tra CI result và detect files changed
   check:
+    # Skip entirely if upstream CI did not succeed.
+    # Also skip when the CI run was triggered by a pull_request — we only deploy from push events
+    # (otherwise PRs from branch 'dev' → 'master' would incorrectly trigger a CD deploy).
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
-      should_deploy: ${{ steps.check.outputs.should_deploy }}
-      image_tag:     ${{ steps.check.outputs.image_tag }}
-      environment:   ${{ steps.determine_env.outputs.environment }}
-      backend:       ${{ steps.changes.outputs.backend }}
-      frontend:      ${{ steps.changes.outputs.frontend }}
+      image_tag:   ${{ github.event.workflow_run.head_sha }}
+      environment: ${{ steps.env.outputs.environment }}
+      backend:     ${{ steps.changes.outputs.backend }}
+      frontend:    ${{ steps.changes.outputs.frontend }}
     steps:
-      - name: Check if should deploy
-        id: check
-        run: |
-          if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
-            echo "should_deploy=true" >> $GITHUB_OUTPUT
-            echo "image_tag=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
-          else
-            echo "should_deploy=false" >> $GITHUB_OUTPUT
-            echo "image_tag=" >> $GITHUB_OUTPUT
-          fi
-
       - name: Determine environment from branch
-        id: determine_env
+        id: env
         run: |
           BRANCH="${{ github.event.workflow_run.head_branch }}"
-          
           if [ "$BRANCH" = "master" ]; then
-            ENVIRONMENT="prod"
+            echo "environment=prod" >> "$GITHUB_OUTPUT"
           else
-            ENVIRONMENT="dev"
+            echo "environment=dev" >> "$GITHUB_OUTPUT"
           fi
-          
-          echo "environment=${ENVIRONMENT}" >> $GITHUB_OUTPUT
-          echo "✅ Determined environment: ${ENVIRONMENT} (branch: ${BRANCH})"
+          echo "Resolved environment for branch ${BRANCH}"
 
-      # Checkout tại commit SHA của CI run
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 0  # Fetch full history for paths-filter
+          fetch-depth: 2
+          persist-credentials: false
 
-      # Get parent commit SHA
       - name: Get parent commit
         id: parent
         run: |
           PARENT_SHA=$(git rev-parse ${{ github.event.workflow_run.head_sha }}^)
-          echo "sha=${PARENT_SHA}" >> $GITHUB_OUTPUT
-          echo "✅ Parent commit: ${PARENT_SHA}"
+          echo "sha=${PARENT_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Detect changed services
         uses: dorny/paths-filter@v3
@@ -74,9 +70,7 @@ jobs:
 
   deploy-backend:
     needs: check
-    if: |
-      needs.check.outputs.should_deploy == 'true' &&
-      needs.check.outputs.backend == 'true'
+    if: needs.check.outputs.backend == 'true'
     uses: ./.github/workflows/reusable-deploy-backend.yml
     permissions:
       contents: write
@@ -90,15 +84,92 @@ jobs:
 
   deploy-frontend:
     needs: check
-    if: |
-      needs.check.outputs.should_deploy == 'true' &&
-      needs.check.outputs.frontend == 'true'
+    if: needs.check.outputs.frontend == 'true'
     uses: ./.github/workflows/reusable-deploy-frontend.yml
     permissions:
       contents: read
       id-token: write
+      actions: read   # required by download-artifact@v4 when reading from a different workflow run
     with:
+      image_tag: ${{ needs.check.outputs.image_tag }}
       environment: ${{ needs.check.outputs.environment }}
-      branch: ${{ github.event.workflow_run.head_branch }}
+      workflow_run_id: ${{ github.event.workflow_run.id }}
     secrets:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+
+  notify:
+    # Always run after deploy attempts to report status to Discord.
+    needs: [check, deploy-backend, deploy-frontend]
+    if: always() && needs.check.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Send Discord notification
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ENVIRONMENT: ${{ needs.check.outputs.environment }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          BACKEND_RESULT: ${{ needs.deploy-backend.result }}
+          FRONTEND_RESULT: ${{ needs.deploy-frontend.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL}" ]; then
+            echo "DISCORD_WEBHOOK_URL not configured — skipping notification."
+            exit 0
+          fi
+
+          # Treat 'skipped' as success (no changes in that service).
+          # Treat 'failure' or 'cancelled' as a problem worth flagging.
+          status_icon() {
+            case "$1" in
+              success|skipped) echo "✅" ;;
+              failure)         echo "❌" ;;
+              cancelled)       echo "⚠️" ;;
+              *)               echo "ℹ️" ;;
+            esac
+          }
+
+          OVERALL="success"
+          if [ "${BACKEND_RESULT}" = "failure" ] || [ "${FRONTEND_RESULT}" = "failure" ] \
+             || [ "${BACKEND_RESULT}" = "cancelled" ] || [ "${FRONTEND_RESULT}" = "cancelled" ]; then
+            OVERALL="failure"
+          fi
+
+          COLOR=3066993   # green
+          if [ "${OVERALL}" = "failure" ]; then
+            COLOR=15158332 # red
+          fi
+
+          BACKEND_ICON=$(status_icon "${BACKEND_RESULT}")
+          FRONTEND_ICON=$(status_icon "${FRONTEND_RESULT}")
+
+          SHORT_SHA="${SHA:0:7}"
+
+          payload=$(jq -n \
+            --arg title "Deploy ${ENVIRONMENT^^} — ${OVERALL}" \
+            --arg url "${RUN_URL}" \
+            --arg branch "${BRANCH}" \
+            --arg sha "${SHORT_SHA}" \
+            --arg backend "${BACKEND_ICON} ${BACKEND_RESULT}" \
+            --arg frontend "${FRONTEND_ICON} ${FRONTEND_RESULT}" \
+            --argjson color "${COLOR}" \
+            '{
+              embeds: [{
+                title: $title,
+                url: $url,
+                color: $color,
+                fields: [
+                  { name: "Branch",   value: $branch,   inline: true },
+                  { name: "Commit",   value: $sha,      inline: true },
+                  { name: "Backend",  value: $backend,  inline: true },
+                  { name: "Frontend", value: $frontend, inline: true }
+                ]
+              }]
+            }')
+
+          curl -fsS -H "Content-Type: application/json" \
+            -X POST -d "${payload}" "${DISCORD_WEBHOOK_URL}" >/dev/null
+
+          echo "Discord notification sent (overall: ${OVERALL})."

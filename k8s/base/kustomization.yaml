@@ -1,10 +1,9 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-images:
-  - name: eventfund-backend
-    newName: 612827970242.dkr.ecr.ap-southeast-1.amazonaws.com/eventfund-backend
-    newTag: 2f11d0586daa05c81716307d27bd58505971f0d9
+# Image tag and newName are defined per-environment in k8s/overlays/{dev,prod}/kustomization.yaml.
+# This base kustomization defines the structural resources only; environment-specific values
+# (image tags, configmap data, replicas, etc.) live in overlays.
 
 resources:
   - namespace/namespace.yaml
@@ -22,6 +21,6 @@ resources:
   - backend/processor-marketplace-deployment.yaml
   - backend/worker-deposits-deployment.yaml
   - monitoring/prometheus-rules.yaml
-  # alertmanager-config.yaml được apply riêng trong manual-infra-apply workflow
-  # không đưa vào ArgoCD sync để tránh conflict với Prometheus Helm
-  # ArgoCD và Grafana Ingress được tạo riêng trong namespace của chúng, không qua kustomize overlay
+  # alertmanager-config.yaml is applied separately in manual-infra-apply workflow,
+  # excluded here to avoid conflict with Prometheus Helm chart.
+  # ArgoCD and Grafana ingresses are created in their own namespaces, not via this overlay.
