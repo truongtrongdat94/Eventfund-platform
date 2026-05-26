@@ -25,34 +25,17 @@ on:
       - 'docker-compose.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Determine environment from branch
-  determine-env:
-    runs-on: ubuntu-latest
-    outputs:
-      environment: ${{ steps.env.outputs.environment }}
-    steps:
-      - name: Determine environment from branch
-        id: env
-        run: |
-          BRANCH="${{ github.ref_name }}"
-          
-          if [ "$BRANCH" = "master" ]; then
-            ENVIRONMENT="prod"
-          else
-            ENVIRONMENT="dev"
-          fi
-          
-          echo "environment=${ENVIRONMENT}" >> $GITHUB_OUTPUT
-          echo "✅ Determined environment: ${ENVIRONMENT} (branch: ${BRANCH})"
-
-  # Detect which services have changed
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       backend:   ${{ steps.filter.outputs.backend }}
       frontend:  ${{ steps.filter.outputs.frontend }}
@@ -80,14 +63,15 @@ jobs:
               - 'docker-compose.yml'
 
   frontend:
-    needs: [changes, determine-env]
+    needs: changes
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.shared == 'true'
     uses: ./.github/workflows/reusable-build-frontend.yml
     permissions:
       contents: read
       id-token: write
     with:
-      environment: ${{ needs.determine-env.outputs.environment }}
+      # Inline branch→env mapping; no separate job needed.
+      environment: ${{ github.ref_name == 'master' && 'prod' || 'dev' }}
     secrets:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
 
@@ -97,7 +81,7 @@ jobs:
     uses: ./.github/workflows/reusable-build-contracts.yml
 
   backend:
-    needs: [changes, determine-env]
+    needs: changes
     if: needs.changes.outputs.backend == 'true' || needs.changes.outputs.shared == 'true'
     uses: ./.github/workflows/reusable-build-backend.yml
     permissions:
@@ -105,7 +89,7 @@ jobs:
       id-token: write
       security-events: write
     with:
-      environment: ${{ needs.determine-env.outputs.environment }}
+      environment: ${{ github.ref_name == 'master' && 'prod' || 'dev' }}
     secrets:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
       RPC_URL: ${{ secrets.RPC_URL }}
@@ -117,9 +101,10 @@ jobs:
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     with:
+      # scan_mode is auto-detected inside the reusable workflow from github.event_name.
       branch: ${{ github.ref_name }}
-      scan_mode: pr  # CI always uses PR mode (changed files only)
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}

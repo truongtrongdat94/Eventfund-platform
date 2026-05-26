@@ -3,27 +3,40 @@ name: Reusable – Deploy Frontend
 on:
   workflow_call:
     inputs:
+      image_tag:
+        description: 'Commit SHA from the CI run (used for checkout to lock to CI revision).'
+        type: string
+        required: true
       environment:
-        description: 'Environment to deploy to'
+        description: 'Target environment (dev or prod).'
         type: string
         default: 'dev'
-      branch:
-        description: 'Branch to checkout'
+      workflow_run_id:
+        description: 'CI workflow_run.id used to download the pre-built frontend artifact.'
         type: string
         required: true
     secrets:
       AWS_ACCOUNT_ID:
         required: true
 
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ inputs.environment }}
 
     steps:
-      - name: Checkout repo
+      # Pin checkout to CI commit SHA, not the branch tip — prevents race where a newer
+      # commit landed on the branch between CI completion and CD start.
+      - name: Checkout repo at CI revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ inputs.image_tag }}
           persist-credentials: false
 
       - name: Load config
@@ -38,53 +51,25 @@ jobs:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
           aws_region: ${{ steps.config.outputs.aws_region }}
 
-      - name: Pull frontend env from SSM
-        shell: bash
+      # Download the dist/ artifact built by CI for the same commit instead of rebuilding.
+      # This guarantees byte-for-byte identical output to what CI tested.
+      - name: Download frontend artifact from CI run
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist-${{ inputs.image_tag }}
+          path: frontend/dist
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.workflow_run_id }}
+
+      - name: Upload to S3
         run: |
           set -euo pipefail
-          SSM_PREFIX="/eventfund/${{ steps.config.outputs.environment }}/frontend"
-          ENV_FILE="frontend/.env"
-          aws ssm get-parameters-by-path \
-            --path "$SSM_PREFIX" \
-            --recursive \
-            --with-decryption \
-            --region ${{ steps.config.outputs.aws_region }} \
-            --query 'Parameters[*].[Name,Value]' \
-            --output json > /tmp/ssm.json
-          jq -r '.[] | @tsv' /tmp/ssm.json > /tmp/ssm.tsv
-          while IFS=$(printf '\t') read -r name value; do
-            KEY=$(echo "$name" | sed "s|^$SSM_PREFIX/||")
-            echo "${KEY}=${value}" >> "$ENV_FILE"
-          done < /tmp/ssm.tsv
-          rm -f /tmp/ssm.json /tmp/ssm.tsv
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ steps.config.outputs.node_version }}
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build
-        working-directory: frontend
-        run: npm run build
-
-      # Upload to S3 using AWS CLI
-      - name: Upload to S3
-        shell: bash
-        run: |
-          aws s3 sync frontend/dist/ s3://${{ steps.config.outputs.frontend_s3_bucket }}/ \
+          aws s3 sync frontend/dist/ "s3://${{ steps.config.outputs.frontend_s3_bucket }}/" \
             --follow-symlinks \
             --delete \
             --cache-control "public,max-age=31536000,immutable" \
-            --region ${{ steps.config.outputs.aws_region }}
-          echo "✅ Uploaded frontend to S3: ${{ steps.config.outputs.frontend_s3_bucket }}"
+            --region "${{ steps.config.outputs.aws_region }}"
 
-      # Invalidate CloudFront cache using distribution ID from config
       - name: Invalidate CloudFront cache
         uses: chetan/invalidate-cloudfront-action@v2
         env:

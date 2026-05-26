@@ -52,7 +52,7 @@ runs:
       id: s3_config
       shell: bash
       run: |
-        CONFIG_FILE="${{ github.action_path }}/../../config/env.yml"
+        CONFIG_FILE="${{ github.action_path }}/../../config/public_env.yml"
 
         S3_BUCKET="${{ inputs.s3_bucket }}"
         if [ -z "$S3_BUCKET" ]; then

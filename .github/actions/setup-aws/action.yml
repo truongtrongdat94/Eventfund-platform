@@ -27,7 +27,7 @@ runs:
       id: config
       shell: bash
       run: |
-        CONFIG_FILE="${{ github.action_path }}/../../config/env.yml"
+        CONFIG_FILE="${{ github.action_path }}/../../config/public_env.yml"
 
         # Load region
         REGION="${{ inputs.aws_region }}"

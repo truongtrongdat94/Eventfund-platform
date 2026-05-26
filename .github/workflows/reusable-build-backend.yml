@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: 'Environment (dev or prod)'
+        description: 'Environment (dev or prod) — used to fetch SSM env vars for the smoke test.'
         type: string
         default: 'dev'
     secrets:
@@ -13,9 +13,15 @@ on:
       RPC_URL:
         required: false
 
+permissions:
+  contents: read
+  id-token: write
+  security-events: write
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repo
@@ -41,35 +47,33 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Build và load vào local daemon để smoke test dùng ngay
-      # Không push ở bước này — push riêng sau khi test pass
-      - name: Build image
+      # Single build: load into local docker daemon for smoke test AND
+      # (on push/workflow_dispatch) push to ECR with both SHA and 'latest' tags.
+      # Buildx supports multiple outputs in one invocation.
+      - name: Build image (load + optional push)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           target: production
-          push: false
           load: true
+          push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Smoke test dùng image local — không cần pull từ ECR
       - name: Smoke test (/health)
         run: |
           set -euo pipefail
 
           IMAGE_TAG="${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:${{ github.sha }}"
           ENVIRONMENT="${{ inputs.environment }}"
-          
-          # Pull env vars từ SSM, ghi vào temp file để inject vào container
-          # Dùng env-file thay vì -e flag để handle values có spaces/ký tự đặc biệt
-          ENV_FILE=$(mktemp)
-          trap "rm -f $ENV_FILE" EXIT  # đảm bảo xóa file dù exit thế nào
 
-          echo "📥 Pulling env vars from SSM: /eventfund/${ENVIRONMENT}/backend"
+          # env-file (not -e) so values with spaces/special chars survive intact.
+          ENV_FILE=$(mktemp)
+          trap "rm -f $ENV_FILE" EXIT
 
           aws ssm get-parameters-by-path \
             --path "/eventfund/${ENVIRONMENT}/backend" \
@@ -88,38 +92,20 @@ jobs:
 
           for i in {1..60}; do
             if curl -fsS "http://localhost:4000/health" | jq -e '.ok == true' >/dev/null 2>&1; then
-              echo "✅ Health check passed"
+              echo "Health check passed"
               docker stop backend-test
               exit 0
             fi
-            echo "Waiting for backend... ($i/60)"
             sleep 3
           done
 
-          echo "❌ Health check failed"
+          echo "Health check failed"
           docker logs --tail 100 backend-test
           docker stop backend-test
           exit 1
 
-      # Push lên ECR chỉ khi là push event (không phải PR)
-      # Chạy sau khi smoke test pass
-      # Dùng docker/build-push-action để push multiple tags cùng lúc
-      - name: Push image to ECR
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          target: production
-          push: true
-          tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:${{ github.sha }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:latest
-          cache-from: type=gha
-
-      # Add Trivy DB cache for faster scans
+      # Always scan on every CI run — including master push. Production must not skip scans.
       - name: Cache Trivy DB
-        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/dev'
         uses: actions/cache@v4
         with:
           path: ~/.cache/trivy
@@ -127,10 +113,7 @@ jobs:
           restore-keys: |
             trivy-db-
 
-      # Trivy scan — chạy trên image local, không cần pull từ ECR
-      # Pin to commit hash for security and reproducibility
       - name: Run Trivy security scan
-        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/dev'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:${{ github.sha }}
@@ -142,7 +125,7 @@ jobs:
           TRIVY_NO_PROGRESS: 'true'
 
       - name: Upload Trivy SARIF to GitHub Security
-        if: (github.event_name == 'pull_request' || github.ref == 'refs/heads/dev') && always()
+        if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif

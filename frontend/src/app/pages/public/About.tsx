@@ -115,7 +115,7 @@ const capabilityGrid = [
 
 const teamMembers = [
   { handle: "truongtrongdat94", profile: "https://github.com/truongtrongdat94" },
-  { handle: "kieuphat159", profile: "https://github.com/kieuphat159" },
+  { handle: "truongtrongdat94", profile: "https://github.com/truongtrongdat94" },
   { handle: "NhanVT24", profile: "https://github.com/NhanVT24" },
   { handle: "bincasau", profile: "https://github.com/bincasau" },
   { handle: "NguyenVu3105", profile: "https://github.com/NguyenVu3105" },

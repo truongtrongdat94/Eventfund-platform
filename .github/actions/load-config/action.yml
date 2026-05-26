@@ -1,5 +1,5 @@
 name: Load Configuration
-description: Load configuration from centralized env.yml file
+description: Load configuration from centralized public_env.yml file
 
 inputs:
   environment:
@@ -126,7 +126,7 @@ runs:
       id: load
       shell: bash
       run: |
-        CONFIG_FILE="${{ github.action_path }}/../../config/env.yml"
+        CONFIG_FILE="${{ github.action_path }}/../../config/public_env.yml"
 
         if [ ! -f "$CONFIG_FILE" ]; then
           echo "❌ Config file not found: $CONFIG_FILE"

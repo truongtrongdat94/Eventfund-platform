@@ -4,24 +4,31 @@ on:
   workflow_call:
     inputs:
       image_tag:
-        description: 'Docker image tag to deploy'
+        description: 'Docker image tag to deploy (commit SHA from CI run).'
         type: string
         required: true
       environment:
-        description: 'Environment to deploy to'
+        description: 'Target environment (dev or prod).'
         type: string
         default: 'dev'
       branch:
-        description: 'Branch to checkout and commit to'
+        description: 'Branch to commit GitOps change back to (matches CI run branch).'
         type: string
         required: true
     secrets:
       AWS_ACCOUNT_ID:
         required: true
 
+permissions:
+  contents: write
+  id-token: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Uses GitHub Environments — configure prod approval rules in repo Settings → Environments.
+    environment: ${{ inputs.environment }}
 
     steps:
       - name: Checkout repo
@@ -45,65 +52,110 @@ jobs:
       - name: Setup Kustomize
         uses: imranismail/setup-kustomize@v2
 
-      - name: Render K8s manifests with environment values
+      - name: Render backend ConfigMap into overlay
+        env:
+          # Pin NODE_ENV per environment — overlay value, not in public_env.yml.
+          NODE_ENV: ${{ inputs.environment == 'prod' && 'PROD' || 'DEV' }}
+          BACKEND_PORT: ${{ steps.config.outputs.k8s_backend_port }}
+          LOG_LEVEL: ${{ steps.config.outputs.k8s_log_level }}
+          RATE_LIMIT_WINDOW_MS: ${{ steps.config.outputs.k8s_rate_limit_window_ms }}
+          RATE_LIMIT_MAX_REQUESTS: ${{ steps.config.outputs.k8s_rate_limit_max_requests }}
+          AUTH_RATE_LIMIT_MAX: ${{ steps.config.outputs.k8s_auth_rate_limit_max }}
+          MIN_DEPOSIT_VND: ${{ steps.config.outputs.k8s_min_deposit_vnd }}
+          MAX_DEPOSIT_VND: ${{ steps.config.outputs.k8s_max_deposit_vnd }}
+          DEPOSIT_ORDER_EXPIRY_MINUTES: ${{ steps.config.outputs.k8s_deposit_order_expiry_minutes }}
+          AUTO_EVENT_LIFECYCLE_ENABLED: ${{ steps.config.outputs.k8s_auto_event_lifecycle_enabled }}
+          AUTO_EVENT_LIFECYCLE_INTERVAL_MS: ${{ steps.config.outputs.k8s_auto_event_lifecycle_interval_ms }}
+          AUTO_EVENT_LIFECYCLE_SCAN_LIMIT: ${{ steps.config.outputs.k8s_auto_event_lifecycle_scan_limit }}
+          AUTO_TICKETING_DEFAULT_TYPE: ${{ steps.config.outputs.k8s_auto_ticketing_default_type }}
+          CHAIN_LOG_CHUNK_SIZE: ${{ steps.config.outputs.k8s_chain_log_chunk_size }}
+          JWT_EXPIRES_IN: ${{ steps.config.outputs.k8s_jwt_expires_in }}
+          SIWE_CHAIN_ID: ${{ steps.config.outputs.k8s_siwe_chain_id }}
+          DELEGATED_SIG_CHAIN_ID: ${{ steps.config.outputs.k8s_delegated_sig_chain_id }}
+          DELEGATED_SIG_DOMAIN_NAME: ${{ steps.config.outputs.k8s_delegated_sig_domain_name }}
+          DELEGATED_SIG_DOMAIN_VERSION: ${{ steps.config.outputs.k8s_delegated_sig_domain_version }}
+          RELAYER_REQUIRE_CREATE_EVENT_SIGNATURE: ${{ steps.config.outputs.k8s_relayer_require_create_event_signature }}
+          RELAYER_REQUIRE_ADMIN_STATUS_SIGNATURE: ${{ steps.config.outputs.k8s_relayer_require_admin_status_signature }}
+          CONTRACTS_ARTIFACTS_DIR: ${{ steps.config.outputs.k8s_contracts_artifacts_dir }}
+          WEB3AUTH_NETWORK: ${{ steps.config.outputs.k8s_web3auth_network }}
         run: |
-          export ENVIRONMENT="${{ steps.config.outputs.environment }}"
-          export AWS_REGION="${{ steps.config.outputs.aws_region }}"
-          export BACKEND_PORT="${{ steps.config.outputs.k8s_backend_port }}"
-          export LOG_LEVEL="${{ steps.config.outputs.k8s_log_level }}"
-          export RATE_LIMIT_WINDOW_MS="${{ steps.config.outputs.k8s_rate_limit_window_ms }}"
-          export RATE_LIMIT_MAX_REQUESTS="${{ steps.config.outputs.k8s_rate_limit_max_requests }}"
-          export AUTH_RATE_LIMIT_MAX="${{ steps.config.outputs.k8s_auth_rate_limit_max }}"
-          export MIN_DEPOSIT_VND="${{ steps.config.outputs.k8s_min_deposit_vnd }}"
-          export MAX_DEPOSIT_VND="${{ steps.config.outputs.k8s_max_deposit_vnd }}"
-          export DEPOSIT_ORDER_EXPIRY_MINUTES="${{ steps.config.outputs.k8s_deposit_order_expiry_minutes }}"
-          export AUTO_EVENT_LIFECYCLE_ENABLED="${{ steps.config.outputs.k8s_auto_event_lifecycle_enabled }}"
-          export AUTO_EVENT_LIFECYCLE_INTERVAL_MS="${{ steps.config.outputs.k8s_auto_event_lifecycle_interval_ms }}"
-          export AUTO_EVENT_LIFECYCLE_SCAN_LIMIT="${{ steps.config.outputs.k8s_auto_event_lifecycle_scan_limit }}"
-          export AUTO_TICKETING_DEFAULT_TYPE="${{ steps.config.outputs.k8s_auto_ticketing_default_type }}"
-          export CHAIN_LOG_CHUNK_SIZE="${{ steps.config.outputs.k8s_chain_log_chunk_size }}"
-          export JWT_EXPIRES_IN="${{ steps.config.outputs.k8s_jwt_expires_in }}"
-          export SIWE_CHAIN_ID="${{ steps.config.outputs.k8s_siwe_chain_id }}"
-          export DELEGATED_SIG_CHAIN_ID="${{ steps.config.outputs.k8s_delegated_sig_chain_id }}"
-          export DELEGATED_SIG_DOMAIN_NAME="${{ steps.config.outputs.k8s_delegated_sig_domain_name }}"
-          export DELEGATED_SIG_DOMAIN_VERSION="${{ steps.config.outputs.k8s_delegated_sig_domain_version }}"
-          export RELAYER_REQUIRE_CREATE_EVENT_SIGNATURE="${{ steps.config.outputs.k8s_relayer_require_create_event_signature }}"
-          export RELAYER_REQUIRE_ADMIN_STATUS_SIGNATURE="${{ steps.config.outputs.k8s_relayer_require_admin_status_signature }}"
-          export CONTRACTS_ARTIFACTS_DIR="${{ steps.config.outputs.k8s_contracts_artifacts_dir }}"
-          export WEB3AUTH_NETWORK="${{ steps.config.outputs.k8s_web3auth_network }}"
+          set -euo pipefail
+          OVERLAY_DIR="k8s/overlays/${{ inputs.environment }}"
+          TEMPLATE="k8s/base/backend/configmap.yaml.tpl"
+          TARGET="${OVERLAY_DIR}/backend-configmap-patch.yaml"
 
-          for f in k8s/base/backend/configmap.yaml k8s/base/secrets/externalsecret-backend.yaml k8s/base/secrets/secretstore.yaml; do
-            envsubst < "$f" > "$f.rendered" && mv "$f.rendered" "$f"
-          done
+          if [ ! -f "$TEMPLATE" ]; then
+            echo "Template not found: $TEMPLATE"
+            exit 1
+          fi
 
-      - name: Update image tag in kustomization.yaml
+          envsubst < "$TEMPLATE" > "$TARGET"
+          echo "Rendered $TARGET"
+
+      - name: Update image tag in overlay kustomization.yaml
+        env:
+          ECR_URL: ${{ steps.config.outputs.ecr_backend_repository_url }}
+          NEW_TAG: ${{ inputs.image_tag }}
+          OVERLAY: k8s/overlays/${{ inputs.environment }}/kustomization.yaml
         run: |
-          ECR_URL="${{ steps.config.outputs.ecr_backend_repository_url }}"
-          cd k8s/base
+          set -euo pipefail
 
-          # Dùng sed thay vì kustomize edit để tránh làm hỏng cấu trúc YAML khi có comments
-          # Chỉ update dòng newTag của image eventfund-backend
-          sed -i "/name: eventfund-backend/,/newTag:/ s|newTag:.*|newTag: ${{ inputs.image_tag }}|" kustomization.yaml
+          yq -i \
+            '(.images[] | select(.name == "eventfund-backend").newName) = strenv(ECR_URL)
+             | (.images[] | select(.name == "eventfund-backend").newTag) = strenv(NEW_TAG)' \
+            "$OVERLAY"
 
-          # Update newName nếu ECR URL thay đổi
-          sed -i "/name: eventfund-backend/,/newName:/ s|newName:.*|newName: ${ECR_URL}|" kustomization.yaml
+          echo "Updated overlay image to: ${ECR_URL}:${NEW_TAG}"
 
-          echo "Updated image to: ${ECR_URL}:${{ inputs.image_tag }}"
+          kustomize build "k8s/overlays/${{ inputs.environment }}" > /dev/null \
+            || { echo "kustomize build failed"; exit 1; }
 
-          # Validate file không bị corrupt
-          kustomize build . > /dev/null || { echo "❌ kustomization.yaml is invalid after edit"; exit 1; }
-
-      # Use git-auto-commit-action for cleaner git operations
-      - name: Commit and push
+      - name: Commit and push overlay changes
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "ci(deploy): update backend image to ${{ inputs.image_tag }}"
-          file_pattern: 'k8s/base/kustomization.yaml k8s/base/backend/configmap.yaml k8s/base/secrets/externalsecret-backend.yaml k8s/base/secrets/secretstore.yaml'
+          commit_message: "ci(deploy): update ${{ inputs.environment }} backend image to ${{ inputs.image_tag }}"
+          file_pattern: |
+            k8s/overlays/${{ inputs.environment }}/kustomization.yaml
+            k8s/overlays/${{ inputs.environment }}/backend-configmap-patch.yaml
           commit_user_name: github-actions[bot]
           commit_user_email: github-actions[bot]@users.noreply.github.com
           commit_author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
-          skip_dirty_check: false
-          skip_fetch: false
-          skip_checkout: false
-          disable_globbing: false
-          create_branch: false
+
+      - name: Verify EKS rollout (kubectl rollout status)
+        env:
+          NAMESPACE: ${{ steps.config.outputs.namespace }}
+          AWS_REGION: ${{ steps.config.outputs.aws_region }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          ECR_URL: ${{ steps.config.outputs.ecr_backend_repository_url }}
+        run: |
+          set -euo pipefail
+
+          # Single EKS cluster (named after project) hosts both dev/prod via separate namespaces.
+          CLUSTER_NAME="${{ steps.config.outputs.project_name }}"
+          echo "Updating kubeconfig for cluster: ${CLUSTER_NAME}"
+          aws eks update-kubeconfig --region "${AWS_REGION}" --name "${CLUSTER_NAME}"
+
+          # Wait for ArgoCD to pick up the commit and patch the deployment image,
+          # then watch rollout. Bounded by step timeout (default 25m for the job).
+          DEADLINE=$((SECONDS + 600))   # 10 min wait for ArgoCD pickup
+          EXPECTED="${ECR_URL}:${IMAGE_TAG}"
+          echo "Waiting for deployment/api in ${NAMESPACE} to reach image ${EXPECTED}"
+
+          while [ $SECONDS -lt $DEADLINE ]; do
+            CURRENT=$(kubectl -n "${NAMESPACE}" get deployment/api \
+              -o jsonpath='{.spec.template.spec.containers[?(@.name=="api")].image}' 2>/dev/null || echo "")
+            if [ "${CURRENT}" = "${EXPECTED}" ]; then
+              echo "ArgoCD has applied target image."
+              break
+            fi
+            echo "Current: '${CURRENT}'  (target ${EXPECTED}) — waiting..."
+            sleep 15
+          done
+
+          if [ "${CURRENT:-}" != "${EXPECTED}" ]; then
+            echo "ArgoCD did not apply target image within 10 minutes."
+            kubectl -n "${NAMESPACE}" describe deployment/api | tail -50
+            exit 1
+          fi
+
+          kubectl -n "${NAMESPACE}" rollout status deployment/api --timeout=10m

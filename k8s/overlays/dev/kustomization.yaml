@@ -6,17 +6,21 @@ namespace: eventfund-dev
 resources:
   - ../../base
 
+# Image tag is updated per deploy by reusable-deploy-backend.yml.
+# newName is derived from public_env.yml (ECR repo URL) — keep in sync if AWS account changes.
+images:
+  - name: eventfund-backend
+    newName: 612827970242.dkr.ecr.ap-southeast-1.amazonaws.com/eventfund-backend
+    newTag: 2f11d0586daa05c81716307d27bd58505971f0d9
+
 patches:
-  # Patch ConfigMap to set NODE_ENV=DEV
-  - target:
+  # ConfigMap values rendered from public_env.yml by reusable-deploy-backend.yml.
+  - path: backend-configmap-patch.yaml
+    target:
       kind: ConfigMap
       name: eventfund-backend-config
-    patch: |-
-      - op: replace
-        path: /data/NODE_ENV
-        value: "DEV"
 
-  # Patch ExternalSecret to use /eventfund/dev/backend path
+  # ExternalSecret path for dev environment.
   - target:
       kind: ExternalSecret
       name: eventfund-backend-secret
@@ -28,7 +32,6 @@ patches:
         path: /spec/dataFrom/0/rewrite/0/regexp/source
         value: "/eventfund/dev/backend/(.*)"
 
-  # Patch API deployment for dev-specific settings
   - target:
       kind: Deployment
       name: api
@@ -37,7 +40,6 @@ patches:
         path: /spec/replicas
         value: 2
 
-  # Patch HPA for dev-specific settings
   - target:
       kind: HorizontalPodAutoscaler
       name: api-hpa
@@ -49,7 +51,6 @@ patches:
         path: /spec/maxReplicas
         value: 4
 
-  # Patch Ingress annotations for dev
   - target:
       kind: Ingress
       name: api-ingress
