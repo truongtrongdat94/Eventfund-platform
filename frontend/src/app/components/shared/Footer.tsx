@@ -30,8 +30,8 @@ export const Footer: React.FC = () => {
             <h4 className="font-semibold text-white mb-4">Connect</h4>
             <ul className="space-y-2 text-sm text-slate-400">
               <li><a href="https://www.facebook.com/thanhphat.kieu.942/" className="hover:text-white transition-colors">Facebook</a></li>
-              <li><a href="mailto:kieuphat159@gmail.com" className="hover:text-white transition-colors">Gmail</a></li>
-              <li><a href="https://github.com/kieuphat159/Eventfund-platform" className="hover:text-white transition-colors">GitHub</a></li>
+              <li><a href="mailto:truongtrongdat94@gmail.com" className="hover:text-white transition-colors">Gmail</a></li>
+              <li><a href="https://github.com/truongtrongdat94/Eventfund-platform" className="hover:text-white transition-colors">GitHub</a></li>
             </ul>
           </div>
         </div>
