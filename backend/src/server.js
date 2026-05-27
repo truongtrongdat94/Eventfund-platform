@@ -3,8 +3,6 @@
  * 
  * 
  * 
- * 
- * 
  * Platform - Backend Server
  */
 
