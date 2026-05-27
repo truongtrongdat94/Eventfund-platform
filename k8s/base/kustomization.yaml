@@ -9,8 +9,10 @@ resources:
   - namespace/namespace.yaml
   - secrets/externalsecret-backend.yaml
   - backend/configmap.yaml
-  - backend/api-deployment.yaml
+  - backend/api-rollout.yaml
   - backend/api-service.yaml
+  - backend/api-preview-service.yaml
+  - backend/api-analysis-template.yaml
   - backend/api-ingress.yaml
   - backend/api-hpa.yaml
   - backend/indexer-fund-deployment.yaml

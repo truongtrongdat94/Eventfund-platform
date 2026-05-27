@@ -1,23 +1,31 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: api
   labels:
     app: api
     component: backend
 spec:
-  revisionHistoryLimit: 1
   replicas: 2
+  revisionHistoryLimit: 10
   selector:
     matchLabels:
       app: api
+  strategy:
+    blueGreen:
+      activeService: api-svc
+      previewService: api-preview-svc
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 600
+      prePromotionAnalysis:
+        templates:
+          - templateName: api-health-check
   template:
     metadata:
       labels:
         app: api
         component: backend
     spec:
-      # Spread pods across nodes
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -58,4 +66,3 @@ spec:
             periodSeconds: 20
             failureThreshold: 3
       automountServiceAccountToken: false
-

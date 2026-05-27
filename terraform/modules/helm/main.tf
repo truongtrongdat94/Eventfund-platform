@@ -177,6 +177,28 @@ resource "helm_release" "prometheus" {
   depends_on = [helm_release.alb_controller]
 }
 
+# ─── Argo Rollouts ────────────────────────────────────────────────────────────
+# Controller cho Blue-Green / Canary deployments của workload api.
+# CRD: Rollout (thay thế Deployment), AnalysisTemplate, AnalysisRun, Experiment.
+resource "helm_release" "argo_rollouts" {
+  name             = "argo-rollouts"
+  namespace        = "argo-rollouts"
+  repository       = "https://argoproj.github.io/argo-helm"
+  chart            = "argo-rollouts"
+  version          = "2.37.7"
+  create_namespace = true
+  timeout          = 600
+  wait             = true
+  cleanup_on_fail  = true
+
+  set {
+    name  = "dashboard.enabled"
+    value = "true"
+  }
+
+  depends_on = [helm_release.alb_controller]
+}
+
 # ─── Cleanup ALBs trước khi destroy ──────────────────────────────────────────
 # Khi terraform destroy:
 #   1. Provisioner này chạy TRƯỚC khi alb_controller bị xóa (vì depends_on)

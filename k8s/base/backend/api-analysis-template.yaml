@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: api-health-check
+spec:
+  args:
+    - name: namespace
+  metrics:
+    # Pod readiness ratio — phải >= 99% (gần như tất cả pod green Ready)
+    - name: pod-ready-ratio
+      interval: 30s
+      count: 5
+      successCondition: result >= 0.99
+      failureLimit: 2
+      provider:
+        prometheus:
+          address: http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090
+          query: |
+            sum(kube_pod_status_ready{namespace="{{args.namespace}}", pod=~"api-.*", condition="true"})
+            /
+            sum(kube_pod_container_status_running{namespace="{{args.namespace}}", container="api"})
+
+    # Restart rate — không pod nào được restart trong 2 phút gần nhất
+    - name: pod-restart-rate
+      interval: 30s
+      count: 5
+      successCondition: result <= 0
+      failureLimit: 1
+      provider:
+        prometheus:
+          address: http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090
+          query: |
+            sum(rate(kube_pod_container_status_restarts_total{namespace="{{args.namespace}}", pod=~"api-.*"}[2m]))
