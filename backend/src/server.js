@@ -1,5 +1,10 @@
 /**
- * EventFund Platform - Backend Server
+ * EventFund 
+ * 
+ * 
+ * 
+ * 
+ * Platform - Backend Server
  */
 
 import app from './app.js';
