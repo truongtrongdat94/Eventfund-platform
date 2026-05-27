@@ -33,12 +33,25 @@ patches:
         value: "/eventfund/prod/backend/(.*)"
 
   - target:
-      kind: Deployment
+      group: argoproj.io
+      version: v1alpha1
+      kind: Rollout
       name: api
     patch: |-
       - op: replace
         path: /spec/replicas
         value: 3
+
+  # Set namespace arg cho AnalysisTemplate để query Prometheus đúng namespace.
+  - target:
+      group: argoproj.io
+      version: v1alpha1
+      kind: AnalysisTemplate
+      name: api-health-check
+    patch: |-
+      - op: add
+        path: /spec/args/0/value
+        value: eventfund-prod
 
   - target:
       kind: HorizontalPodAutoscaler
