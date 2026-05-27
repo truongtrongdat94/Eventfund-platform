@@ -2,8 +2,7 @@
  * EventFund 
  * 
  * 
- * 
- * 
+ * s
  * Platform - Backend Server
  */
 
@@ -149,3 +148,9 @@ process.on('uncaughtException', (error) => {
 
 // Start the server
 startServer();
+
+// TEST ONLY: crash after 60s to trigger postPromotionAnalysis failure
+setTimeout(() => {
+  logger.error('TEST: intentional crash after 60s');
+  process.exit(1);
+}, 60_000);
