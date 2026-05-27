@@ -1,25 +1,20 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-
 namespace: eventfund-dev
-
 resources:
   - ../../base
-
 # Image tag is updated per deploy by reusable-deploy-backend.yml.
 # newName is derived from public_env.yml (ECR repo URL) — keep in sync if AWS account changes.
 images:
   - name: eventfund-backend
     newName: 612827970242.dkr.ecr.ap-southeast-1.amazonaws.com/eventfund-backend
-    newTag: 2f11d0586daa05c81716307d27bd58505971f0d9
-
+    newTag: 51dc98cf23e5189ce4273c1af3417d0ee90fb606
 patches:
   # ConfigMap values rendered from public_env.yml by reusable-deploy-backend.yml.
   - path: backend-configmap-patch.yaml
     target:
       kind: ConfigMap
       name: eventfund-backend-config
-
   # ExternalSecret path for dev environment.
   - target:
       kind: ExternalSecret
@@ -31,7 +26,6 @@ patches:
       - op: replace
         path: /spec/dataFrom/0/rewrite/0/regexp/source
         value: "/eventfund/dev/backend/(.*)"
-
   - target:
       group: argoproj.io
       version: v1alpha1
@@ -41,7 +35,6 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 2
-
   # Set namespace arg cho AnalysisTemplate để query Prometheus đúng namespace.
   - target:
       group: argoproj.io
@@ -52,7 +45,6 @@ patches:
       - op: add
         path: /spec/args/0/value
         value: eventfund-dev
-
   - target:
       kind: HorizontalPodAutoscaler
       name: api-hpa
@@ -63,7 +55,6 @@ patches:
       - op: replace
         path: /spec/maxReplicas
         value: 4
-
   - target:
       kind: Ingress
       name: api-ingress
