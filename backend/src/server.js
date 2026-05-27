@@ -149,8 +149,8 @@ process.on('uncaughtException', (error) => {
 // Start the server
 startServer();
 
-// TEST ONLY: crash after 60s to trigger postPromotionAnalysis failure
+// TEST ONLY: crash after 4min to trigger postPromotionAnalysis failure
 setTimeout(() => {
-  logger.error('TEST: intentional crash after 60s');
+  logger.error('TEST: intentional crash after 4min');
   process.exit(1);
-}, 60_000);
+}, 240_000);
