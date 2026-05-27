@@ -19,7 +19,7 @@ spec:
           query: |
             sum(kube_pod_status_ready{namespace="{{args.namespace}}", pod=~"api-.*", condition="true"})
             /
-            sum(kube_pod_container_status_running{namespace="{{args.namespace}}", container="api"})
+            (sum(kube_pod_container_status_running{namespace="{{args.namespace}}", container="api"}) > 0)
 
     # Restart rate — không pod nào restart trong 2 phút gần nhất.
     # len(result) == 0 nghĩa là không có metric (chưa có pod) → coi như pass.

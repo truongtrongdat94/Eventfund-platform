@@ -2,7 +2,7 @@
  * EventFund 
  * 
  * 
- * s
+ * 
  * Platform - Backend Server
  */
 
