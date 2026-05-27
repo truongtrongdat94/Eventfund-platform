@@ -2,8 +2,6 @@
  * EventFund Platform - Frontend Application
  * Main entry point for the React application
  * 
- * 
- * 
  */
 
 // Must be first — patches process.nextTick and other Node globals before

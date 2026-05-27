@@ -6,11 +6,12 @@ spec:
   args:
     - name: namespace
   metrics:
-    # Pod readiness ratio — phải >= 99% (gần như tất cả pod green Ready)
+    # Pod readiness ratio — phải >= 99% (gần như tất cả pod green Ready).
+    # Prometheus provider trả về result dạng []float64; phải truy cập result[0].
     - name: pod-ready-ratio
       interval: 30s
       count: 5
-      successCondition: result >= 0.99
+      successCondition: len(result) > 0 && result[0] >= 0.99
       failureLimit: 2
       provider:
         prometheus:
@@ -20,11 +21,12 @@ spec:
             /
             sum(kube_pod_container_status_running{namespace="{{args.namespace}}", container="api"})
 
-    # Restart rate — không pod nào được restart trong 2 phút gần nhất
+    # Restart rate — không pod nào restart trong 2 phút gần nhất.
+    # len(result) == 0 nghĩa là không có metric (chưa có pod) → coi như pass.
     - name: pod-restart-rate
       interval: 30s
       count: 5
-      successCondition: result <= 0
+      successCondition: len(result) == 0 || result[0] <= 0
       failureLimit: 1
       provider:
         prometheus:

@@ -1,6 +1,4 @@
 /**
- * 
- * 
  * EventFund Platform - Backend Server
  */
 

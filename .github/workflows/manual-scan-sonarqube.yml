@@ -14,10 +14,14 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read  # Required by reusable-scan-sonarqube.yml
 
 jobs:
   sonarqube-scan:
     uses: ./.github/workflows/reusable-scan-sonarqube.yml
+    permissions:
+      contents: read
+      pull-requests: read
     with:
       # Reusable auto-detects scan mode: workflow_dispatch event → branch analysis (full scan).
       branch: ${{ inputs.branch }}
