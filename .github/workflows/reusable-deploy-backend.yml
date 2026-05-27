@@ -121,7 +121,7 @@ jobs:
           commit_user_email: github-actions[bot]@users.noreply.github.com
           commit_author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
 
-      - name: Verify EKS rollout (kubectl rollout status)
+      - name: Verify Argo Rollouts apply (rollout/api)
         env:
           NAMESPACE: ${{ steps.config.outputs.namespace }}
           AWS_REGION: ${{ steps.config.outputs.aws_region }}
@@ -132,20 +132,30 @@ jobs:
 
           # Single EKS cluster (named after project) hosts both dev/prod via separate namespaces.
           CLUSTER_NAME="${{ steps.config.outputs.project_name }}"
-          echo "Updating kubeconfig for cluster: ${CLUSTER_NAME}"
+
+          # Check if cluster exists before attempting to connect
+          echo "Checking if EKS cluster exists: ${CLUSTER_NAME}"
+          if ! aws eks describe-cluster --region "${AWS_REGION}" --name "${CLUSTER_NAME}" &>/dev/null; then
+            echo "EKS cluster '${CLUSTER_NAME}' does not exist or is not accessible."
+            echo "This is expected if the cluster was destroyed to save costs."
+            echo "GitOps commit was successful. Deployment will apply when cluster is recreated."
+            exit 0
+          fi
+
+          echo "Cluster exists. Updating kubeconfig for cluster: ${CLUSTER_NAME}"
           aws eks update-kubeconfig --region "${AWS_REGION}" --name "${CLUSTER_NAME}"
 
-          # Wait for ArgoCD to pick up the commit and patch the deployment image,
-          # then watch rollout. Bounded by step timeout (default 25m for the job).
+          # Wait for ArgoCD to pick up the commit and patch the rollout image.
+          # Note: workload `api` uses kind: Rollout (Argo Rollouts blue-green), not Deployment.
           DEADLINE=$((SECONDS + 600))   # 10 min wait for ArgoCD pickup
           EXPECTED="${ECR_URL}:${IMAGE_TAG}"
-          echo "Waiting for deployment/api in ${NAMESPACE} to reach image ${EXPECTED}"
+          echo "Waiting for rollout/api in ${NAMESPACE} to reach image ${EXPECTED}"
 
           while [ $SECONDS -lt $DEADLINE ]; do
-            CURRENT=$(kubectl -n "${NAMESPACE}" get deployment/api \
+            CURRENT=$(kubectl -n "${NAMESPACE}" get rollout/api \
               -o jsonpath='{.spec.template.spec.containers[?(@.name=="api")].image}' 2>/dev/null || echo "")
             if [ "${CURRENT}" = "${EXPECTED}" ]; then
-              echo "ArgoCD has applied target image."
+              echo "ArgoCD has applied target image to Rollout."
               break
             fi
             echo "Current: '${CURRENT}'  (target ${EXPECTED}) — waiting..."
@@ -154,8 +164,48 @@ jobs:
 
           if [ "${CURRENT:-}" != "${EXPECTED}" ]; then
             echo "ArgoCD did not apply target image within 10 minutes."
-            kubectl -n "${NAMESPACE}" describe deployment/api | tail -50
+            kubectl -n "${NAMESPACE}" describe rollout/api | tail -80 || true
             exit 1
           fi
 
-          kubectl -n "${NAMESPACE}" rollout status deployment/api --timeout=10m
+          # Wait until Argo Rollouts reaches a terminal state:
+          #   - Paused   = pre-promotion analysis passed, awaiting manual promote (autoPromotion=false). SUCCESS.
+          #   - Healthy  = first deploy or already-promoted. SUCCESS.
+          #   - Degraded = analysis failed or pods crashing. FAIL.
+          ROLLOUT_DEADLINE=$((SECONDS + 600))   # 10 min for analysis + green readiness
+          echo "Waiting for rollout/api to reach Paused/Healthy/Degraded..."
+
+          while [ $SECONDS -lt $ROLLOUT_DEADLINE ]; do
+            PHASE=$(kubectl -n "${NAMESPACE}" get rollout/api \
+              -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+            MESSAGE=$(kubectl -n "${NAMESPACE}" get rollout/api \
+              -o jsonpath='{.status.message}' 2>/dev/null || echo "")
+            echo "Phase: '${PHASE}'  Message: '${MESSAGE}'"
+
+            case "${PHASE}" in
+              Paused)
+                echo ""
+                echo "Rollout is PAUSED. Pre-promotion analysis passed."
+                echo "Action required: manually promote when ready:"
+                echo "  kubectl argo rollouts promote api -n ${NAMESPACE}"
+                echo ""
+                kubectl -n "${NAMESPACE}" get rollout/api -o wide || true
+                exit 0
+                ;;
+              Healthy)
+                echo "Rollout is Healthy (no blue-green switch needed — first deploy or already promoted)."
+                exit 0
+                ;;
+              Degraded)
+                echo "Rollout is DEGRADED. Pre-promotion analysis failed or pods crashing."
+                kubectl -n "${NAMESPACE}" describe rollout/api | tail -80 || true
+                kubectl -n "${NAMESPACE}" get analysisrun -l rollout-type=BlueGreen 2>/dev/null || true
+                exit 1
+                ;;
+            esac
+            sleep 15
+          done
+
+          echo "Rollout did not reach a terminal phase within 10 minutes (phase='${PHASE:-unknown}')."
+          kubectl -n "${NAMESPACE}" describe rollout/api | tail -80 || true
+          exit 1
