@@ -20,6 +20,9 @@ spec:
       prePromotionAnalysis:
         templates:
           - templateName: api-health-check
+      postPromotionAnalysis:
+        templates:
+          - templateName: api-health-check
   template:
     metadata:
       labels:
