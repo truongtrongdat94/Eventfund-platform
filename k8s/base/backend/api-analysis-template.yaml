@@ -5,6 +5,7 @@ metadata:
 spec:
   args:
     - name: namespace
+    - name: pod-hash
   metrics:
     # Pod readiness ratio — phải >= 99% (gần như tất cả pod green Ready).
     # Prometheus provider trả về result dạng []float64; phải truy cập result[0].
@@ -17,9 +18,9 @@ spec:
         prometheus:
           address: http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090
           query: |
-            sum(kube_pod_status_ready{namespace="{{args.namespace}}", pod=~"api-.*", condition="true"})
+            sum(kube_pod_status_ready{namespace="{{args.namespace}}", pod=~"api-{{args.pod-hash}}-.*", condition="true"})
             /
-            sum(kube_pod_container_status_running{namespace="{{args.namespace}}", container="api"})
+            (sum(kube_pod_container_status_running{namespace="{{args.namespace}}", container="api", pod=~"api-{{args.pod-hash}}-.*"}) > 0)
 
     # Restart rate — không pod nào restart trong 2 phút gần nhất.
     # len(result) == 0 nghĩa là không có metric (chưa có pod) → coi như pass.
@@ -32,4 +33,4 @@ spec:
         prometheus:
           address: http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090
           query: |
-            sum(rate(kube_pod_container_status_restarts_total{namespace="{{args.namespace}}", pod=~"api-.*"}[2m]))
+            sum(rate(kube_pod_container_status_restarts_total{namespace="{{args.namespace}}", pod=~"api-{{args.pod-hash}}-.*"}[2m]))

@@ -58,15 +58,15 @@ jobs:
           echo "sha=${PARENT_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Detect changed services
-        uses: dorny/paths-filter@v3
         id: changes
-        with:
-          base: ${{ steps.parent.outputs.sha }}
-          filters: |
-            backend:
-              - 'backend/**'
-            frontend:
-              - 'frontend/**'
+        run: |
+          PARENT="${{ steps.parent.outputs.sha }}"
+          HEAD="${{ github.event.workflow_run.head_sha }}"
+          git fetch --depth=1 --no-tags origin "$PARENT"
+          BACKEND=$(git diff --name-only "$PARENT" "$HEAD" | grep -c '^backend/' || true)
+          FRONTEND=$(git diff --name-only "$PARENT" "$HEAD" | grep -c '^frontend/' || true)
+          echo "backend=$([ "$BACKEND" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "frontend=$([ "$FRONTEND" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   deploy-backend:
     needs: check
