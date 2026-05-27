@@ -1,0 +1,35 @@
+name: Manual – Rollback Backend
+
+# GitOps rollback: updates kustomization.yaml to a previous image tag and pushes
+# to git so Argo CD picks it up cleanly (bypassing the selfHeal conflict).
+#
+# How to find the image_tag to rollback to:
+#   Argo Rollouts UI → Revisions → copy the tag after the last ":" in the image URL.
+#   Example: "...eventfund-backend:6a247141cb8..." → tag is "6a247141cb8097600cf3d26e434008659f4f4616"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options: [dev, prod]
+      image_tag:
+        description: 'Image tag to rollback to (commit SHA shown in Argo Rollouts UI)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  rollback:
+    uses: ./.github/workflows/reusable-deploy-backend.yml
+    with:
+      image_tag: ${{ inputs.image_tag }}
+      environment: ${{ inputs.environment }}
+      branch: ${{ inputs.environment == 'prod' && 'master' || 'dev' }}
+    secrets:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
