@@ -11,7 +11,7 @@ spec:
     # Prometheus provider trả về result dạng []float64; phải truy cập result[0].
     - name: pod-ready-ratio
       interval: 30s
-      count: 5
+      count: 20
       successCondition: len(result) > 0 && result[0] >= 0.99
       failureLimit: 2
       provider:
@@ -26,7 +26,7 @@ spec:
     # len(result) == 0 nghĩa là không có metric (chưa có pod) → coi như pass.
     - name: pod-restart-rate
       interval: 30s
-      count: 5
+      count: 20
       successCondition: len(result) == 0 || result[0] <= 0
       failureLimit: 1
       provider:
