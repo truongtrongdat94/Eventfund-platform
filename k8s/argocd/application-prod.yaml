@@ -20,3 +20,12 @@ spec:
       selfHeal: true   # tự fix nếu ai đó sửa trực tiếp trên cluster
     syncOptions:
       - CreateNamespace=true
+  ignoreDifferences:
+    - group: ""
+      kind: Service
+      jqPathExpressions:
+        - .spec.selector["rollouts-pod-template-hash"]
+    - group: argoproj.io
+      kind: Rollout
+      jsonPointers:
+        - /spec/replicas

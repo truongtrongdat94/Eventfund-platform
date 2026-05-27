@@ -20,3 +20,15 @@ spec:
       selfHeal: true   # tự fix nếu ai đó sửa trực tiếp trên cluster
     syncOptions:
       - CreateNamespace=true
+  # Argo Rollouts manages Service selectors (blue/green traffic switch) and Rollout
+  # replica counts at runtime. Without these exclusions, selfHeal would overwrite
+  # Rollouts' traffic routing on every sync, breaking blue-green and auto-rollback.
+  ignoreDifferences:
+    - group: ""
+      kind: Service
+      jqPathExpressions:
+        - .spec.selector["rollouts-pod-template-hash"]
+    - group: argoproj.io
+      kind: Rollout
+      jsonPointers:
+        - /spec/replicas

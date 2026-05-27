@@ -20,9 +20,17 @@ spec:
       prePromotionAnalysis:
         templates:
           - templateName: api-health-check
+        args:
+          - name: pod-hash
+            valueFrom:
+              podTemplateHashValue: Latest
       postPromotionAnalysis:
         templates:
           - templateName: api-health-check
+        args:
+          - name: pod-hash
+            valueFrom:
+              podTemplateHashValue: Latest
   template:
     metadata:
       labels:
