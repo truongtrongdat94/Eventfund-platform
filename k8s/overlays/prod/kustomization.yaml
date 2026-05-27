@@ -8,7 +8,7 @@ resources:
 images:
   - name: eventfund-backend
     newName: 612827970242.dkr.ecr.ap-southeast-1.amazonaws.com/eventfund-backend
-    newTag: 0ea2d79748ffd5de3286a3841e56c5c642312074
+    newTag: 699bf95217165b3be262816cc269a80308e15f4f
 patches:
   # ConfigMap values rendered from public_env.yml by reusable-deploy-backend.yml.
   - path: backend-configmap-patch.yaml
