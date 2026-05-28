@@ -26,16 +26,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
-        with:
-          environment: ${{ inputs.environment }}
-
       - name: Configure AWS
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ vars.AWS_REGION }}
+          role_name: ${{ vars.AWS_OIDC_ROLE_NAME }}
+
+      - name: Set environment variables
+        run: |
+          echo "AWS_REGION=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
+          echo "NODE_VERSION=20.19.0" >> $GITHUB_ENV
 
       - name: Pull frontend env from AWS SSM
         run: |
@@ -52,7 +53,7 @@ jobs:
             --path "$SSM_PREFIX" \
             --recursive \
             --with-decryption \
-            --region "${{ steps.config.outputs.aws_region }}" \
+            --region "${{ env.AWS_REGION }}" \
             --query 'Parameters[*].[Name,Value]' \
             --output json | \
           jq -r --arg prefix "$SSM_PREFIX/" '.[] | (.[0] | sub("^" + $prefix; "")) + "=" + .[1]' \
@@ -61,7 +62,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ steps.config.outputs.node_version }}
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 

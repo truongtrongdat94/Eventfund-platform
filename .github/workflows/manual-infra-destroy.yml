@@ -25,24 +25,24 @@ jobs:
     name: Load Config
     runs-on: ubuntu-latest
     outputs:
-      aws_region:                      ${{ steps.config.outputs.aws_region }}
-      project_name:                    ${{ steps.config.outputs.project_name }}
-      environment:                     ${{ steps.config.outputs.environment }}
-      terraform_version:               ${{ steps.config.outputs.terraform_version }}
-      tf_eks_version:                  ${{ steps.config.outputs.tf_eks_version }}
-      tf_node_instance_type:           ${{ steps.config.outputs.tf_node_instance_type }}
-      tf_node_desired_capacity:        ${{ steps.config.outputs.tf_node_desired_capacity }}
-      tf_node_min_capacity:            ${{ steps.config.outputs.tf_node_min_capacity }}
-      tf_node_max_capacity:            ${{ steps.config.outputs.tf_node_max_capacity }}
-      tf_vpc_cidr:                     ${{ steps.config.outputs.tf_vpc_cidr }}
-      tf_public_subnets_cidr:          ${{ steps.config.outputs.tf_public_subnets_cidr }}
-      tf_private_subnets_cidr:         ${{ steps.config.outputs.tf_private_subnets_cidr }}
-      tf_azs:                          ${{ steps.config.outputs.tf_azs }}
-      ecr_backend_repository:          ${{ steps.config.outputs.ecr_backend_repository }}
-      github_actions_role_name:        ${{ steps.config.outputs.github_actions_role_name }}
-      s3_security_reports_bucket:      ${{ steps.config.outputs.s3_security_reports_bucket }}
-      security_reports_retention_days: ${{ steps.config.outputs.security_reports_retention_days }}
-      argocd_repo_url:                 ${{ steps.config.outputs.argocd_repo_url }}
+      aws_region:                      ap-southeast-1
+      project_name:                    eventfund
+      environment:                     prod
+      terraform_version:               1.7.0
+      tf_eks_version:                  1.33
+      tf_node_instance_type:           m7i-flex.large
+      tf_node_desired_capacity:        2
+      tf_node_min_capacity:            1
+      tf_node_max_capacity:            4
+      tf_vpc_cidr:                     ${{ vars.TF_VPC_CIDR }}
+      tf_public_subnets_cidr:          ${{ vars.TF_PUBLIC_SUBNETS_CIDR }}
+      tf_private_subnets_cidr:         ${{ vars.TF_PRIVATE_SUBNETS_CIDR }}
+      tf_azs:                          ${{ vars.TF_AZS }}
+      ecr_backend_repository:          ${{ vars.ECR_BACKEND_REPOSITORY }}
+      github_actions_role_name:        ${{ vars.AWS_OIDC_ROLE_NAME }}
+      s3_security_reports_bucket:      ${{ vars.S3_SECURITY_REPORTS_BUCKET }}
+      security_reports_retention_days: 15
+      argocd_repo_url:                 https://github.com/truongtrongdat94/Eventfund-platform.git
 
     steps:
       - uses: actions/checkout@v4
@@ -53,10 +53,8 @@ jobs:
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
-
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
+          aws_region: ap-southeast-1
+          role_name: ${{ vars.AWS_OIDC_ROLE_NAME }}
 
   destroy:
     name: Destroy Billable AWS Resources
@@ -76,6 +74,8 @@ jobs:
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ap-southeast-1
+          role_name: ${{ vars.AWS_OIDC_ROLE_NAME }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3

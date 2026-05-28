@@ -17,14 +17,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
+      - name: Set environment variables
+        run: |
+          echo "NODE_VERSION=20.19.0" >> $GITHUB_ENV
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ steps.config.outputs.node_version }}
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: contracts/package-lock.json
 

@@ -35,16 +35,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
-        with:
-          environment: ${{ inputs.environment }}
+      - name: Set environment variables
+        run: |
+          echo "NODE_VERSION=20.19.0" >> $GITHUB_ENV
+          echo "AWS_REGION=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ steps.config.outputs.node_version }}
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: contracts/package-lock.json
 
@@ -55,6 +54,8 @@ jobs:
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ vars.AWS_REGION }}
+          role_name: ${{ vars.AWS_OIDC_ROLE_NAME }}
 
       - name: Deploy to Sepolia and update AWS Parameter Store
         env:
@@ -62,8 +63,8 @@ jobs:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
           ROYALTY_BPS: ${{ secrets.ROYALTY_BPS }}
           DEPLOY_CONFIRMATIONS: ${{ secrets.DEPLOY_CONFIRMATIONS }}
-          ENVIRONMENT: ${{ steps.config.outputs.environment }}
-          AWS_REGION: ${{ steps.config.outputs.aws_region }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          AWS_REGION: ${{ env.AWS_REGION }}
         run: |
           set -euo pipefail
 

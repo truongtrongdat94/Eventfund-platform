@@ -30,16 +30,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
+      - name: Set environment variables
+        run: |
+          echo "SONARCLOUD_BASE_URL=https://sonarcloud.io" >> $GITHUB_ENV
+          echo "SONARCLOUD_PROJECT_KEY=truongtrongdat94_eventfund-platform" >> $GITHUB_ENV
+          echo "SONARCLOUD_ORGANIZATION=truongtrongdat94" >> $GITHUB_ENV
 
       - name: Set Sonar server URL
         id: sonar_url
         run: |
           URL="${{ secrets.SONAR_HOST_URL }}"
           if [ -z "$URL" ]; then
-            URL="${{ steps.config.outputs.sonarcloud_base_url }}"
+            URL="${{ env.SONARCLOUD_BASE_URL }}"
           fi
           echo "url=${URL}" >> "$GITHUB_OUTPUT"
 
@@ -51,8 +53,8 @@ jobs:
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           BRANCH_NAME: ${{ inputs.branch }}
-          PROJECT_KEY: ${{ steps.config.outputs.sonarcloud_project_key }}
-          ORGANIZATION: ${{ steps.config.outputs.sonarcloud_organization }}
+          PROJECT_KEY: ${{ env.SONARCLOUD_PROJECT_KEY }}
+          ORGANIZATION: ${{ env.SONARCLOUD_ORGANIZATION }}
         run: |
           set -euo pipefail
 

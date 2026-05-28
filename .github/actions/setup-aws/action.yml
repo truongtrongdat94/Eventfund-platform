@@ -28,9 +28,11 @@ runs:
       shell: bash
       run: |
         # Load region (input > vars > fallback)
+        # vars.* are exposed via top-level `env: ${{ vars }}` in caller workflows
+        # because the `vars` context is not directly readable inside composite actions.
         REGION="${{ inputs.aws_region }}"
         if [ -z "$REGION" ]; then
-          REGION="${{ vars.AWS_REGION }}"
+          REGION="${{ env.AWS_REGION }}"
         fi
         if [ -z "$REGION" ]; then
           REGION="ap-southeast-1"
@@ -39,7 +41,7 @@ runs:
         # Load role name (input > vars > fallback)
         ROLE_NAME="${{ inputs.role_name }}"
         if [ -z "$ROLE_NAME" ]; then
-          ROLE_NAME="${{ vars.AWS_OIDC_ROLE_NAME }}"
+          ROLE_NAME="${{ env.AWS_OIDC_ROLE_NAME }}"
         fi
         if [ -z "$ROLE_NAME" ]; then
           ROLE_NAME="GitHubActionsRole"
