@@ -27,9 +27,6 @@ runs:
       id: config
       shell: bash
       run: |
-        # Load region (input > vars > fallback)
-        # vars.* are exposed via top-level `env: ${{ vars }}` in caller workflows
-        # because the `vars` context is not directly readable inside composite actions.
         REGION="${{ inputs.aws_region }}"
         if [ -z "$REGION" ]; then
           REGION="${{ env.AWS_REGION }}"
