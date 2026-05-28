@@ -59,7 +59,7 @@ jobs:
         with:
           persist-credentials: false
 
-- name: Configure AWS
+      - name: Configure AWS
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -139,7 +139,7 @@ jobs:
         with:
           persist-credentials: false
 
-- name: Configure AWS
+      - name: Configure AWS
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -218,7 +218,7 @@ jobs:
         with:
           persist-credentials: false
 
-- name: Configure AWS
+      - name: Configure AWS
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -329,7 +329,3 @@ jobs:
           else
             echo " ALERT_EMAIL or ALERT_EMAIL_PASSWORD not set, skipping alertmanager config"
           fi
-
-
-
-

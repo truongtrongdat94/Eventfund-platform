@@ -7,7 +7,6 @@
  * 
  * 
  * 
- * 
  */
 
 // Must be first — patches process.nextTick and other Node globals before
