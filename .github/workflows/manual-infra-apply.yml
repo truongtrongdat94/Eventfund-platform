@@ -12,8 +12,40 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  # AWS
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_BACKEND_REPOSITORY: ${{ vars.ECR_BACKEND_REPOSITORY }}
+  AWS_OIDC_ROLE_NAME: ${{ vars.AWS_OIDC_ROLE_NAME }}
+  
+  # S3
+  S3_SECURITY_REPORTS_BUCKET: ${{ vars.S3_SECURITY_REPORTS_BUCKET }}
+  
+  # Terraform VPC
+  TF_VPC_CIDR: ${{ vars.TF_VPC_CIDR }}
+  TF_PUBLIC_SUBNETS_CIDR: ${{ vars.TF_PUBLIC_SUBNETS_CIDR }}
+  TF_PRIVATE_SUBNETS_CIDR: ${{ vars.TF_PRIVATE_SUBNETS_CIDR }}
+  TF_AZS: ${{ vars.TF_AZS }}
+  
+  # CloudFront
+  CLOUDFRONT_DEV_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DIST_ID_DEV }}
+  CLOUDFRONT_PROD_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DIST_ID_PROD }}
+  
+  # Static configs
+  PROJECT_NAME: eventfund
+  ENVIRONMENT: prod
+  TERRAFORM_VERSION: 1.7.0
+  TF_EKS_VERSION: 1.33
+  TF_NODE_INSTANCE_TYPE: m7i-flex.large
+  TF_NODE_DESIRED_CAPACITY: 2
+  TF_NODE_MIN_CAPACITY: 1
+  TF_NODE_MAX_CAPACITY: 4
+  SECURITY_REPORTS_RETENTION_DAYS: 15
+  ARGOCD_REPO_URL: https://github.com/truongtrongdat94/Eventfund-platform.git
+  ARGOCD_TARGET_REVISION: dev
+  ARGOCD_APP_NAMESPACE: eventfund-dev
+
 jobs:
-  # Job 1: Persistent State (VPC, ECR, S3, CloudFront, IAM)
   apply-persistent:
     runs-on: ubuntu-latest
     if: github.event.inputs.confirm == 'apply'
@@ -27,14 +59,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
-
-      - name: Configure AWS
+- name: Configure AWS
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          role_name: ${{ env.AWS_OIDC_ROLE_NAME }}
 
       - name: Setup Terraform plugin cache directory
         run: |
@@ -52,32 +82,32 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ steps.config.outputs.terraform_version }}
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Generate terraform.auto.tfvars.json
         uses: ./.github/actions/generate-terraform-tfvars
         with:
-          aws_region: ${{ steps.config.outputs.aws_region }}
-          project_name: ${{ steps.config.outputs.project_name }}
-          environment: ${{ steps.config.outputs.environment }}
-          vpc_cidr: ${{ steps.config.outputs.tf_vpc_cidr }}
-          public_subnets_cidr: ${{ steps.config.outputs.tf_public_subnets_cidr }}
-          private_subnets_cidr: ${{ steps.config.outputs.tf_private_subnets_cidr }}
-          azs: ${{ steps.config.outputs.tf_azs }}
-          eks_version: ${{ steps.config.outputs.tf_eks_version }}
-          node_instance_type: ${{ steps.config.outputs.tf_node_instance_type }}
-          node_desired_capacity: ${{ steps.config.outputs.tf_node_desired_capacity }}
-          node_min_capacity: ${{ steps.config.outputs.tf_node_min_capacity }}
-          node_max_capacity: ${{ steps.config.outputs.tf_node_max_capacity }}
-          ecr_backend_repository: ${{ steps.config.outputs.ecr_backend_repository }}
-          github_actions_role_name: ${{ steps.config.outputs.github_actions_role_name }}
+          aws_region: ${{ env.AWS_REGION }}
+          project_name: ${{ env.PROJECT_NAME }}
+          environment: ${{ env.ENVIRONMENT }}
+          vpc_cidr: ${{ env.TF_VPC_CIDR }}
+          public_subnets_cidr: ${{ env.TF_PUBLIC_SUBNETS_CIDR }}
+          private_subnets_cidr: ${{ env.TF_PRIVATE_SUBNETS_CIDR }}
+          azs: ${{ env.TF_AZS }}
+          eks_version: ${{ env.TF_EKS_VERSION }}
+          node_instance_type: ${{ env.TF_NODE_INSTANCE_TYPE }}
+          node_desired_capacity: ${{ env.TF_NODE_DESIRED_CAPACITY }}
+          node_min_capacity: ${{ env.TF_NODE_MIN_CAPACITY }}
+          node_max_capacity: ${{ env.TF_NODE_MAX_CAPACITY }}
+          ecr_backend_repository: ${{ env.ECR_BACKEND_REPOSITORY }}
+          github_actions_role_name: ${{ env.AWS_OIDC_ROLE_NAME }}
           github_repository: ${{ github.repository }}
-          s3_security_reports_bucket: ${{ steps.config.outputs.s3_security_reports_bucket }}
-          security_reports_retention_days: ${{ steps.config.outputs.security_reports_retention_days }}
-          argocd_repo_url: ${{ steps.config.outputs.argocd_repo_url }}
-          argocd_target_revision: ${{ steps.config.outputs.argocd_target_revision }}
-          argocd_app_namespace: ${{ steps.config.outputs.argocd_app_namespace }}
+          s3_security_reports_bucket: ${{ env.S3_SECURITY_REPORTS_BUCKET }}
+          security_reports_retention_days: ${{ env.SECURITY_REPORTS_RETENTION_DAYS }}
+          argocd_repo_url: ${{ env.ARGOCD_REPO_URL }}
+          argocd_target_revision: ${{ env.ARGOCD_TARGET_REVISION }}
+          argocd_app_namespace: ${{ env.ARGOCD_APP_NAMESPACE }}
 
       - name: Terraform Init (Persistent)
         working-directory: terraform/persistent
@@ -94,9 +124,8 @@ jobs:
         timeout-minutes: 20
         run: |
           terraform apply -auto-approve
-          echo "✅ Persistent resources applied"
+          echo " Persistent resources applied"
 
-  # Job 2: Cluster State (EKS, Node Group, NAT)
   apply-cluster:
     runs-on: ubuntu-latest
     needs: apply-persistent
@@ -110,14 +139,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
-
-      - name: Configure AWS
+- name: Configure AWS
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          role_name: ${{ env.AWS_OIDC_ROLE_NAME }}
 
       - name: Setup Terraform plugin cache directory
         run: |
@@ -135,32 +162,32 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ steps.config.outputs.terraform_version }}
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Generate terraform.auto.tfvars.json
         uses: ./.github/actions/generate-terraform-tfvars
         with:
-          aws_region: ${{ steps.config.outputs.aws_region }}
-          project_name: ${{ steps.config.outputs.project_name }}
-          environment: ${{ steps.config.outputs.environment }}
-          vpc_cidr: ${{ steps.config.outputs.tf_vpc_cidr }}
-          public_subnets_cidr: ${{ steps.config.outputs.tf_public_subnets_cidr }}
-          private_subnets_cidr: ${{ steps.config.outputs.tf_private_subnets_cidr }}
-          azs: ${{ steps.config.outputs.tf_azs }}
-          eks_version: ${{ steps.config.outputs.tf_eks_version }}
-          node_instance_type: ${{ steps.config.outputs.tf_node_instance_type }}
-          node_desired_capacity: ${{ steps.config.outputs.tf_node_desired_capacity }}
-          node_min_capacity: ${{ steps.config.outputs.tf_node_min_capacity }}
-          node_max_capacity: ${{ steps.config.outputs.tf_node_max_capacity }}
-          ecr_backend_repository: ${{ steps.config.outputs.ecr_backend_repository }}
-          github_actions_role_name: ${{ steps.config.outputs.github_actions_role_name }}
+          aws_region: ${{ env.AWS_REGION }}
+          project_name: ${{ env.PROJECT_NAME }}
+          environment: ${{ env.ENVIRONMENT }}
+          vpc_cidr: ${{ env.TF_VPC_CIDR }}
+          public_subnets_cidr: ${{ env.TF_PUBLIC_SUBNETS_CIDR }}
+          private_subnets_cidr: ${{ env.TF_PRIVATE_SUBNETS_CIDR }}
+          azs: ${{ env.TF_AZS }}
+          eks_version: ${{ env.TF_EKS_VERSION }}
+          node_instance_type: ${{ env.TF_NODE_INSTANCE_TYPE }}
+          node_desired_capacity: ${{ env.TF_NODE_DESIRED_CAPACITY }}
+          node_min_capacity: ${{ env.TF_NODE_MIN_CAPACITY }}
+          node_max_capacity: ${{ env.TF_NODE_MAX_CAPACITY }}
+          ecr_backend_repository: ${{ env.ECR_BACKEND_REPOSITORY }}
+          github_actions_role_name: ${{ env.AWS_OIDC_ROLE_NAME }}
           github_repository: ${{ github.repository }}
-          s3_security_reports_bucket: ${{ steps.config.outputs.s3_security_reports_bucket }}
-          security_reports_retention_days: ${{ steps.config.outputs.security_reports_retention_days }}
-          argocd_repo_url: ${{ steps.config.outputs.argocd_repo_url }}
-          argocd_target_revision: ${{ steps.config.outputs.argocd_target_revision }}
-          argocd_app_namespace: ${{ steps.config.outputs.argocd_app_namespace }}
+          s3_security_reports_bucket: ${{ env.S3_SECURITY_REPORTS_BUCKET }}
+          security_reports_retention_days: ${{ env.SECURITY_REPORTS_RETENTION_DAYS }}
+          argocd_repo_url: ${{ env.ARGOCD_REPO_URL }}
+          argocd_target_revision: ${{ env.ARGOCD_TARGET_REVISION }}
+          argocd_app_namespace: ${{ env.ARGOCD_APP_NAMESPACE }}
 
       - name: Terraform Init (Cluster)
         working-directory: terraform/cluster
@@ -178,7 +205,6 @@ jobs:
         run: |
           terraform apply -auto-approve
 
-  # Job 3: Services State (Helm releases)
   apply-services:
     runs-on: ubuntu-latest
     needs: apply-cluster
@@ -192,14 +218,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
-
-      - name: Configure AWS
+- name: Configure AWS
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ env.AWS_REGION }}
+          role_name: ${{ env.AWS_OIDC_ROLE_NAME }}
 
       - name: Setup Terraform plugin cache directory
         run: |
@@ -217,32 +241,32 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: ${{ steps.config.outputs.terraform_version }}
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
       - name: Generate terraform.auto.tfvars.json
         uses: ./.github/actions/generate-terraform-tfvars
         with:
-          aws_region: ${{ steps.config.outputs.aws_region }}
-          project_name: ${{ steps.config.outputs.project_name }}
-          environment: ${{ steps.config.outputs.environment }}
-          vpc_cidr: ${{ steps.config.outputs.tf_vpc_cidr }}
-          public_subnets_cidr: ${{ steps.config.outputs.tf_public_subnets_cidr }}
-          private_subnets_cidr: ${{ steps.config.outputs.tf_private_subnets_cidr }}
-          azs: ${{ steps.config.outputs.tf_azs }}
-          eks_version: ${{ steps.config.outputs.tf_eks_version }}
-          node_instance_type: ${{ steps.config.outputs.tf_node_instance_type }}
-          node_desired_capacity: ${{ steps.config.outputs.tf_node_desired_capacity }}
-          node_min_capacity: ${{ steps.config.outputs.tf_node_min_capacity }}
-          node_max_capacity: ${{ steps.config.outputs.tf_node_max_capacity }}
-          ecr_backend_repository: ${{ steps.config.outputs.ecr_backend_repository }}
-          github_actions_role_name: ${{ steps.config.outputs.github_actions_role_name }}
+          aws_region: ${{ env.AWS_REGION }}
+          project_name: ${{ env.PROJECT_NAME }}
+          environment: ${{ env.ENVIRONMENT }}
+          vpc_cidr: ${{ env.TF_VPC_CIDR }}
+          public_subnets_cidr: ${{ env.TF_PUBLIC_SUBNETS_CIDR }}
+          private_subnets_cidr: ${{ env.TF_PRIVATE_SUBNETS_CIDR }}
+          azs: ${{ env.TF_AZS }}
+          eks_version: ${{ env.TF_EKS_VERSION }}
+          node_instance_type: ${{ env.TF_NODE_INSTANCE_TYPE }}
+          node_desired_capacity: ${{ env.TF_NODE_DESIRED_CAPACITY }}
+          node_min_capacity: ${{ env.TF_NODE_MIN_CAPACITY }}
+          node_max_capacity: ${{ env.TF_NODE_MAX_CAPACITY }}
+          ecr_backend_repository: ${{ env.ECR_BACKEND_REPOSITORY }}
+          github_actions_role_name: ${{ env.AWS_OIDC_ROLE_NAME }}
           github_repository: ${{ github.repository }}
-          s3_security_reports_bucket: ${{ steps.config.outputs.s3_security_reports_bucket }}
-          security_reports_retention_days: ${{ steps.config.outputs.security_reports_retention_days }}
-          argocd_repo_url: ${{ steps.config.outputs.argocd_repo_url }}
-          argocd_target_revision: ${{ steps.config.outputs.argocd_target_revision }}
-          argocd_app_namespace: ${{ steps.config.outputs.argocd_app_namespace }}
+          s3_security_reports_bucket: ${{ env.S3_SECURITY_REPORTS_BUCKET }}
+          security_reports_retention_days: ${{ env.SECURITY_REPORTS_RETENTION_DAYS }}
+          argocd_repo_url: ${{ env.ARGOCD_REPO_URL }}
+          argocd_target_revision: ${{ env.ARGOCD_TARGET_REVISION }}
+          argocd_app_namespace: ${{ env.ARGOCD_APP_NAMESPACE }}
 
       - name: Terraform Init (Services)
         working-directory: terraform/services
@@ -254,7 +278,7 @@ jobs:
         timeout-minutes: 15
         run: terraform plan
 
-      - name: "[3/3] Apply Services State (Helm releases)"
+      - name: "[3/3] Apply Services State"
         working-directory: terraform/services
         timeout-minutes: 30
         run: |
@@ -269,8 +293,8 @@ jobs:
         timeout-minutes: 5
         run: |
           aws eks update-kubeconfig \
-            --region ${{ steps.config.outputs.aws_region }} \
-            --name ${{ steps.config.outputs.project_name }}
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.PROJECT_NAME }}
 
       - name: Wait for ArgoCD to be ready
         uses: jupyterhub/action-k8s-await-workloads@v3
@@ -285,10 +309,10 @@ jobs:
         timeout-minutes: 10
         uses: ./.github/actions/update-cloudfront-origin
         with:
-          aws_region: ${{ steps.config.outputs.aws_region }}
-          project_name: ${{ steps.config.outputs.project_name }}
-          cloudfront_dev_distribution_id: ${{ steps.config.outputs.cloudfront_dev_distribution_id }}
-          cloudfront_prod_distribution_id: ${{ steps.config.outputs.cloudfront_prod_distribution_id }}
+          aws_region: ${{ env.AWS_REGION }}
+          project_name: ${{ env.PROJECT_NAME }}
+          cloudfront_dev_distribution_id: ${{ env.CLOUDFRONT_DEV_DISTRIBUTION_ID }}
+          cloudfront_prod_distribution_id: ${{ env.CLOUDFRONT_PROD_DISTRIBUTION_ID }}
           ingress_group_name: eventfund-shared
           origin_id: alb-internal
           timeout_minutes: '8'
@@ -301,7 +325,11 @@ jobs:
           if [ -n "$ALERT_EMAIL" ] && [ -n "$ALERT_EMAIL_PASSWORD" ]; then
             export ALERT_EMAIL ALERT_EMAIL_PASSWORD
             envsubst < k8s/base/monitoring/alertmanager-config.yaml | kubectl apply -f -
-            echo "✅ Alertmanager config applied"
+            echo " Alertmanager config applied"
           else
-            echo "⚠️ ALERT_EMAIL or ALERT_EMAIL_PASSWORD not set, skipping alertmanager config"
+            echo " ALERT_EMAIL or ALERT_EMAIL_PASSWORD not set, skipping alertmanager config"
           fi
+
+
+
+

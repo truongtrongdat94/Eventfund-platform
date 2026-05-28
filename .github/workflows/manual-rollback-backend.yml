@@ -1,12 +1,5 @@
 name: Manual – Rollback Backend
 
-# GitOps rollback: updates kustomization.yaml to a previous image tag and pushes
-# to git so Argo CD picks it up cleanly (bypassing the selfHeal conflict).
-#
-# How to find the image_tag to rollback to:
-#   Argo Rollouts UI → Revisions → copy the tag after the last ":" in the image URL.
-#   Example: "...eventfund-backend:6a247141cb8..." → tag is "6a247141cb8097600cf3d26e434008659f4f4616"
-
 on:
   workflow_dispatch:
     inputs:

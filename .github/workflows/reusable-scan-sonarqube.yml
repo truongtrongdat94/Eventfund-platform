@@ -18,15 +18,6 @@ permissions:
   contents: read
   pull-requests: read
 
-# Scan-mode is auto-detected here from the triggering event — callers don't need to pass it.
-# - pull_request event → PR decoration mode (uses pull_request.number for sonar.pullrequest.key)
-# - any other event (push, workflow_dispatch) → branch analysis mode
-#
-# Quality gate enforcement:
-# - Runs for pull_request and workflow_dispatch events.
-# - Skipped for push events (merge commit on dev/master) so a failing gate cannot block the
-#   downstream CD deploy. The PR scan was the gate; the merge commit is just record-keeping.
-
 jobs:
   sonarqube-scan:
     runs-on: ubuntu-latest
@@ -39,16 +30,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
+      - name: Set environment variables
+        run: |
+          echo "SONARCLOUD_BASE_URL=https://sonarcloud.io" >> $GITHUB_ENV
+          echo "SONARCLOUD_PROJECT_KEY=truongtrongdat94_eventfund-platform" >> $GITHUB_ENV
+          echo "SONARCLOUD_ORGANIZATION=truongtrongdat94" >> $GITHUB_ENV
 
       - name: Set Sonar server URL
         id: sonar_url
         run: |
           URL="${{ secrets.SONAR_HOST_URL }}"
           if [ -z "$URL" ]; then
-            URL="${{ steps.config.outputs.sonarcloud_base_url }}"
+            URL="${{ env.SONARCLOUD_BASE_URL }}"
           fi
           echo "url=${URL}" >> "$GITHUB_OUTPUT"
 
@@ -60,8 +53,8 @@ jobs:
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           BRANCH_NAME: ${{ inputs.branch }}
-          PROJECT_KEY: ${{ steps.config.outputs.sonarcloud_project_key }}
-          ORGANIZATION: ${{ steps.config.outputs.sonarcloud_organization }}
+          PROJECT_KEY: ${{ env.SONARCLOUD_PROJECT_KEY }}
+          ORGANIZATION: ${{ env.SONARCLOUD_ORGANIZATION }}
         run: |
           set -euo pipefail
 
@@ -84,8 +77,6 @@ jobs:
         with:
           args: ${{ steps.sonar_args.outputs.args }}
 
-      # Skip quality gate on push events (merge commits on dev/master). PRs and manual
-      # scans still enforce the gate.
       - name: SonarQube Quality Gate check
         if: github.event_name != 'push'
         uses: SonarSource/sonarqube-quality-gate-action@v1.1.0

@@ -31,28 +31,32 @@ jobs:
     environment: ${{ inputs.environment }}
 
     steps:
-      # Pin checkout to CI commit SHA, not the branch tip — prevents race where a newer
-      # commit landed on the branch between CI completion and CD start.
       - name: Checkout repo at CI revision
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.image_tag }}
           persist-credentials: false
 
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
-        with:
-          environment: ${{ inputs.environment }}
-
       - name: Configure AWS
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
-          aws_region: ${{ steps.config.outputs.aws_region }}
+          aws_region: ${{ vars.AWS_REGION }}
+          role_name: ${{ vars.AWS_OIDC_ROLE_NAME }}
 
-      # Download the dist/ artifact built by CI for the same commit instead of rebuilding.
-      # This guarantees byte-for-byte identical output to what CI tested.
+      - name: Set environment variables
+        run: |
+          echo "AWS_REGION=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
+          
+          # S3 bucket and CloudFront (dev/prod logic)
+          if [ "${{ inputs.environment }}" = "prod" ]; then
+            echo "FRONTEND_S3_BUCKET=${{ vars.FRONTEND_BUCKET_PROD }}" >> $GITHUB_ENV
+            echo "CLOUDFRONT_DISTRIBUTION_ID=${{ vars.CLOUDFRONT_DIST_ID_PROD }}" >> $GITHUB_ENV
+          else
+            echo "FRONTEND_S3_BUCKET=${{ vars.FRONTEND_BUCKET_DEV }}" >> $GITHUB_ENV
+            echo "CLOUDFRONT_DISTRIBUTION_ID=${{ vars.CLOUDFRONT_DIST_ID_DEV }}" >> $GITHUB_ENV
+          fi
+
       - name: Download frontend artifact from CI run
         uses: actions/download-artifact@v4
         with:
@@ -64,15 +68,15 @@ jobs:
       - name: Upload to S3
         run: |
           set -euo pipefail
-          aws s3 sync frontend/dist/ "s3://${{ steps.config.outputs.frontend_s3_bucket }}/" \
+          aws s3 sync frontend/dist/ "s3://${{ env.FRONTEND_S3_BUCKET }}/" \
             --follow-symlinks \
             --delete \
             --cache-control "public,max-age=31536000,immutable" \
-            --region "${{ steps.config.outputs.aws_region }}"
+            --region "${{ env.AWS_REGION }}"
 
       - name: Invalidate CloudFront cache
         uses: chetan/invalidate-cloudfront-action@v2
         env:
-          DISTRIBUTION: ${{ steps.config.outputs.cloudfront_distribution_id }}
+          DISTRIBUTION: ${{ env.CLOUDFRONT_DISTRIBUTION_ID }}
           PATHS: "/*"
-          AWS_REGION: ${{ steps.config.outputs.aws_region }}
+          AWS_REGION: ${{ env.AWS_REGION }}

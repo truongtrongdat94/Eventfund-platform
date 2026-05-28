@@ -33,12 +33,17 @@ jobs:
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ${{ vars.AWS_REGION }}
+          role_name: ${{ vars.AWS_OIDC_ROLE_NAME }}
 
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
-        with:
-          environment: ${{ inputs.environment }}
+      - name: Set environment variables
+        run: |
+          echo "AWS_REGION=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
+          echo "ECR_BACKEND_REPOSITORY=${{ vars.ECR_BACKEND_REPOSITORY }}" >> $GITHUB_ENV
+          
+          # Build ECR URL
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "ECR_BACKEND_REPOSITORY_URL=${AWS_ACCOUNT_ID}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.ECR_BACKEND_REPOSITORY }}" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -47,9 +52,6 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Single build: load into local docker daemon for smoke test AND
-      # (on push/workflow_dispatch) push to ECR with both SHA and 'latest' tags.
-      # Buildx supports multiple outputs in one invocation.
       - name: Build image (load + optional push)
         uses: docker/build-push-action@v5
         with:
@@ -59,8 +61,8 @@ jobs:
           load: true
           push: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:${{ github.sha }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:latest
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -68,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          IMAGE_TAG="${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:${{ github.sha }}"
+          IMAGE_TAG="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:${{ github.sha }}"
           ENVIRONMENT="${{ inputs.environment }}"
 
           # env-file (not -e) so values with spaces/special chars survive intact.
@@ -79,7 +81,7 @@ jobs:
             --path "/eventfund/${ENVIRONMENT}/backend" \
             --recursive \
             --with-decryption \
-            --region ${{ steps.config.outputs.aws_region }} \
+            --region ${{ env.AWS_REGION }} \
             --query 'Parameters[*].[Name,Value]' \
             --output json | \
           jq -r '.[] | (.[0] | split("/") | last) + "=" + .[1]' > "$ENV_FILE"
@@ -104,7 +106,6 @@ jobs:
           docker stop backend-test
           exit 1
 
-      # Always scan on every CI run — including master push. Production must not skip scans.
       - name: Cache Trivy DB
         uses: actions/cache@v4
         with:
@@ -116,7 +117,7 @@ jobs:
       - name: Run Trivy security scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
-          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ steps.config.outputs.ecr_backend_repository }}:${{ github.sha }}
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_BACKEND_REPOSITORY }}:${{ github.sha }}
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH

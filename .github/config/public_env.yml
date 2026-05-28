@@ -1,27 +1,14 @@
 
-aws:
-  region: ap-southeast-1
-  oidc_role_name: GitHubActionsRole
-  account_id_secret: AWS_ACCOUNT_ID  
-  github_actions_role_name: GitHubActionsRole
-  github_repos:
-    - "repo:truongtrongdat94/Eventfund-platform:*"
 
 project:
   name: eventfund
-  environment: dev  
+  environment: dev
 
 environments:
   dev:
-    namespace: eventfund-dev
     branch: dev
-    frontend_bucket: eventfund-frontend-dev
-    cloudfront_distribution_id: E3OWJ1VYDVS1FZ
   prod:
-    namespace: eventfund-prod
     branch: master
-    frontend_bucket: eventfund-frontend-prod
-    cloudfront_distribution_id: E2M82BGPDJOWRI
 
 terraform:
   eks_version: "1.33"
@@ -29,53 +16,22 @@ terraform:
   node_desired_capacity: 2
   node_min_capacity: 1
   node_max_capacity: 4
-  vpc_cidr: "10.0.0.0/16"
-  public_subnets_cidr: '["10.0.0.0/20","10.0.16.0/20"]'
-  private_subnets_cidr: '["10.0.128.0/20","10.0.144.0/20"]'
-  azs: '["ap-southeast-1a","ap-southeast-1b"]'
   terraform_version: "1.7.0"
   security_reports_retention_days: 15
 
 k8s:
-  namespace: eventfund-dev  # Default namespace (for backward compatibility)
   backend_port: "4000"
   log_level: info
-  rate_limit_window_ms: "900000"
-  rate_limit_max_requests: "100"
-  auth_rate_limit_max: "5"
-  min_deposit_vnd: "100000"
-  max_deposit_vnd: "50000000"
-  deposit_order_expiry_minutes: "15"
   auto_event_lifecycle_enabled: "true"
   auto_event_lifecycle_interval_ms: "60000"
   auto_event_lifecycle_scan_limit: "50"
   auto_ticketing_default_type: standard
   chain_log_chunk_size: "500"
-  jwt_expires_in: 7d
-  siwe_chain_id: "11155111"
-  delegated_sig_chain_id: "11155111"
-  delegated_sig_domain_name: EventFund
-  delegated_sig_domain_version: "1"
-  relayer_require_create_event_signature: "true"
-  relayer_require_admin_status_signature: "true"
   contracts_artifacts_dir: ./artifacts
-  web3auth_network: sapphire_devnet
-
-ecr:
-  backend_repository: eventfund-backend
-
-s3:
-  security_reports_bucket: eventfund-security-reports
-  deploy_tmp_bucket_prefix: eventfund-deploy-tmp
-  frontend_bucket: eventfund-frontend-dev  # Default (deprecated, use environments.*.frontend_bucket)
-
-cloudfront:
-  distribution_id: E1PCRG3NRMTP33  # Default dev (deprecated, will be auto-detected from S3 bucket)
 
 argocd:
   repo_url: https://github.com/truongtrongdat94/Eventfund-platform.git
-  target_revision: dev  # Default branch
-  app_namespace: eventfund-dev  # Default namespace
+  target_revision: dev
 
 sonarcloud:
   project_key: truongtrongdat94_eventfund-platform

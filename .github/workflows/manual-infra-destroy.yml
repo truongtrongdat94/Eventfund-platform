@@ -25,24 +25,24 @@ jobs:
     name: Load Config
     runs-on: ubuntu-latest
     outputs:
-      aws_region:                      ${{ steps.config.outputs.aws_region }}
-      project_name:                    ${{ steps.config.outputs.project_name }}
-      environment:                     ${{ steps.config.outputs.environment }}
-      terraform_version:               ${{ steps.config.outputs.terraform_version }}
-      tf_eks_version:                  ${{ steps.config.outputs.tf_eks_version }}
-      tf_node_instance_type:           ${{ steps.config.outputs.tf_node_instance_type }}
-      tf_node_desired_capacity:        ${{ steps.config.outputs.tf_node_desired_capacity }}
-      tf_node_min_capacity:            ${{ steps.config.outputs.tf_node_min_capacity }}
-      tf_node_max_capacity:            ${{ steps.config.outputs.tf_node_max_capacity }}
-      tf_vpc_cidr:                     ${{ steps.config.outputs.tf_vpc_cidr }}
-      tf_public_subnets_cidr:          ${{ steps.config.outputs.tf_public_subnets_cidr }}
-      tf_private_subnets_cidr:         ${{ steps.config.outputs.tf_private_subnets_cidr }}
-      tf_azs:                          ${{ steps.config.outputs.tf_azs }}
-      ecr_backend_repository:          ${{ steps.config.outputs.ecr_backend_repository }}
-      github_actions_role_name:        ${{ steps.config.outputs.github_actions_role_name }}
-      s3_security_reports_bucket:      ${{ steps.config.outputs.s3_security_reports_bucket }}
-      security_reports_retention_days: ${{ steps.config.outputs.security_reports_retention_days }}
-      argocd_repo_url:                 ${{ steps.config.outputs.argocd_repo_url }}
+      aws_region:                      ap-southeast-1
+      project_name:                    eventfund
+      environment:                     prod
+      terraform_version:               1.7.0
+      tf_eks_version:                  1.33
+      tf_node_instance_type:           m7i-flex.large
+      tf_node_desired_capacity:        2
+      tf_node_min_capacity:            1
+      tf_node_max_capacity:            4
+      tf_vpc_cidr:                     ${{ vars.TF_VPC_CIDR }}
+      tf_public_subnets_cidr:          ${{ vars.TF_PUBLIC_SUBNETS_CIDR }}
+      tf_private_subnets_cidr:         ${{ vars.TF_PRIVATE_SUBNETS_CIDR }}
+      tf_azs:                          ${{ vars.TF_AZS }}
+      ecr_backend_repository:          ${{ vars.ECR_BACKEND_REPOSITORY }}
+      github_actions_role_name:        ${{ vars.AWS_OIDC_ROLE_NAME }}
+      s3_security_reports_bucket:      ${{ vars.S3_SECURITY_REPORTS_BUCKET }}
+      security_reports_retention_days: 15
+      argocd_repo_url:                 https://github.com/truongtrongdat94/Eventfund-platform.git
 
     steps:
       - uses: actions/checkout@v4
@@ -53,10 +53,8 @@ jobs:
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
-
-      - name: Load config
-        id: config
-        uses: ./.github/actions/load-config
+          aws_region: ap-southeast-1
+          role_name: ${{ vars.AWS_OIDC_ROLE_NAME }}
 
   destroy:
     name: Destroy Billable AWS Resources
@@ -65,7 +63,6 @@ jobs:
     if: github.event.inputs.confirm == 'destroy'
     timeout-minutes: 60
     
-    # ✅ APPROVAL GATE - destroy requires approval (critical operation)
     environment: production-infra
 
     steps:
@@ -77,6 +74,8 @@ jobs:
         uses: ./.github/actions/setup-aws
         with:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws_region: ap-southeast-1
+          role_name: ${{ vars.AWS_OIDC_ROLE_NAME }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -84,7 +83,6 @@ jobs:
           terraform_version: ${{ needs.setup.outputs.terraform_version }}
           terraform_wrapper: false
 
-      # Setup Terraform plugin cache properly
       - name: Setup Terraform plugin cache directory
         run: |
           mkdir -p ~/.terraform.d/plugin-cache
@@ -98,7 +96,6 @@ jobs:
           restore-keys: |
             terraform-plugins-${{ runner.os }}-
 
-      # Generate terraform.auto.tfvars.json for all states
       - name: Generate terraform.auto.tfvars.json
         uses: ./.github/actions/generate-terraform-tfvars
         with:
@@ -123,18 +120,15 @@ jobs:
           argocd_target_revision: master
           argocd_app_namespace: eventfund-dev
 
-      # ─── Step 1: Destroy Services (Helm releases) ────────────────────────────
-      - name: "[1/3] Destroy Services (Helm releases)"
+      - name: "[1/3] Destroy Services"
         id: destroy_services
         working-directory: terraform/services
         timeout-minutes: 20
         run: |
-          # Configure kubectl TRƯỚC KHI terraform init
-          # Vì Helm/Kubernetes provider cần connect ngay khi init
           aws eks update-kubeconfig \
             --region ${{ needs.setup.outputs.aws_region }} \
             --name ${{ needs.setup.outputs.project_name }} \
-            2>/dev/null || echo "⚠️ Could not configure kubectl (cluster may not exist)"
+            2>/dev/null || echo " Could not configure kubectl (cluster may not exist)"
           
           terraform init
           terraform destroy -auto-approve
@@ -146,8 +140,7 @@ jobs:
           echo "Waiting 30s for ALB Controller to cleanup ALBs/ENIs..."
           sleep 30
 
-      # ─── Step 2: Destroy Cluster (EKS + NAT Gateway) ─────────────────────────
-      - name: "[2/3] Destroy Cluster (EKS + NAT Gateway)"
+      - name: "[2/3] Destroy Cluster (EKS)"
         id: destroy_cluster
         working-directory: terraform/cluster
         timeout-minutes: 30
@@ -156,7 +149,6 @@ jobs:
           terraform destroy -auto-approve
         continue-on-error: false
 
-      # ─── Step 3: Destroy Persistent (Optional - VPC only if requested) ───────
       - name: "[3/3] Destroy VPC (Optional)"
         id: destroy_vpc
         if: github.event.inputs.destroy_vpc == 'yes'
@@ -165,39 +157,6 @@ jobs:
         run: |
           terraform init
           
-          # Only destroy VPC, keep ECR, S3, CloudFront, IAM
           terraform destroy \
             -target=module.vpc \
             -auto-approve
-
-      - name: Summary
-        if: always()
-        run: |
-          echo "## Destroy Report (Multi-State)" >> $GITHUB_STEP_SUMMARY
-          echo "| State | Status | Saving |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|---|" >> $GITHUB_STEP_SUMMARY
-
-          [[ "${{ steps.destroy_services.outcome }}" == "success" ]] \
-            && echo "| Services (Helm, ArgoCD, Prometheus) | ✅ Destroyed | ~\$0.02/hr |" >> $GITHUB_STEP_SUMMARY \
-            || echo "| Services (Helm, ArgoCD, Prometheus) | ❌ Failed | – |" >> $GITHUB_STEP_SUMMARY
-
-          [[ "${{ steps.destroy_cluster.outcome }}" == "success" ]] \
-            && echo "| Cluster (EKS, Node Group, NAT) | ✅ Destroyed | ~\$0.32/hr |" >> $GITHUB_STEP_SUMMARY \
-            || echo "| Cluster (EKS, Node Group, NAT) | ❌ Failed | – |" >> $GITHUB_STEP_SUMMARY
-
-          if [[ "${{ github.event.inputs.destroy_vpc }}" == "yes" ]]; then
-            [[ "${{ steps.destroy_vpc.outcome }}" == "success" ]] \
-              && echo "| VPC | ✅ Destroyed | \$0 (free) |" >> $GITHUB_STEP_SUMMARY \
-              || echo "| VPC | ❌ Failed | – |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| VPC | ⏭️ Kept | \$0 (free) |" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Persistent resources kept:** ECR, S3, CloudFront, GitHub OIDC, IAM (~\$1.50/month)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Total savings:** ~\$252/month" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**To redeploy:**" >> $GITHUB_STEP_SUMMARY
-          echo "1. \`cd terraform/cluster && terraform apply\`" >> $GITHUB_STEP_SUMMARY
-          echo "2. \`cd terraform/services && terraform apply\`" >> $GITHUB_STEP_SUMMARY

@@ -27,26 +27,21 @@ runs:
       id: config
       shell: bash
       run: |
-        CONFIG_FILE="${{ github.action_path }}/../../config/public_env.yml"
-
-        # Load region
         REGION="${{ inputs.aws_region }}"
         if [ -z "$REGION" ]; then
-          if [ -f "$CONFIG_FILE" ]; then
-            REGION=$(yq '.aws.region' "$CONFIG_FILE")
-          else
-            REGION="ap-southeast-1"  # Fallback default
-          fi
+          REGION="${{ env.AWS_REGION }}"
+        fi
+        if [ -z "$REGION" ]; then
+          REGION="ap-southeast-1"
         fi
 
-        # Load role name
+        # Load role name (input > vars > fallback)
         ROLE_NAME="${{ inputs.role_name }}"
         if [ -z "$ROLE_NAME" ]; then
-          if [ -f "$CONFIG_FILE" ]; then
-            ROLE_NAME=$(yq '.aws.oidc_role_name' "$CONFIG_FILE")
-          else
-            ROLE_NAME="GitHubActionsRole"  # Fallback default
-          fi
+          ROLE_NAME="${{ env.AWS_OIDC_ROLE_NAME }}"
+        fi
+        if [ -z "$ROLE_NAME" ]; then
+          ROLE_NAME="GitHubActionsRole"
         fi
 
         # Construct full role ARN

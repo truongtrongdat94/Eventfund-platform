@@ -14,7 +14,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read  # Required by reusable-scan-sonarqube.yml
+  pull-requests: read  
 
 jobs:
   sonarqube-scan:
@@ -23,7 +23,6 @@ jobs:
       contents: read
       pull-requests: read
     with:
-      # Reusable auto-detects scan mode: workflow_dispatch event → branch analysis (full scan).
       branch: ${{ inputs.branch }}
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

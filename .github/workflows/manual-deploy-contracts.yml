@@ -15,7 +15,6 @@ jobs:
   deploy:
     uses: ./.github/workflows/reusable-deploy-contracts.yml
     with:
-      # Hardcoded to dev to match current behavior; flip to 'prod' (or expose as input) when prod is ready.
       environment: dev
     secrets:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}

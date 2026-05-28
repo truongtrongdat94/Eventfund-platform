@@ -71,7 +71,6 @@ jobs:
       contents: read
       id-token: write
     with:
-      # Inline branch→env mapping; no separate job needed.
       environment: ${{ github.ref_name == 'master' && 'prod' || 'dev' }}
     secrets:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -104,7 +103,6 @@ jobs:
       actions: read
       pull-requests: read
     with:
-      # scan_mode is auto-detected inside the reusable workflow from github.event_name.
       branch: ${{ github.ref_name }}
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

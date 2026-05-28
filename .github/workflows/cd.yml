@@ -1,8 +1,5 @@
 name: CD
 
-# IMPORTANT: workflow_run executes from the DEFAULT branch (master), not from the
-# branch that triggered CI. Changes to this file on feature branches won't take
-# effect until merged into master. Edits live-tested only via the master branch.
 on:
   workflow_run:
     workflows: [CI]
@@ -12,17 +9,12 @@ on:
 permissions:
   contents: read
 
-# Group by triggering branch so dev/prod deploys don't block each other.
-# (github.ref is always default branch in workflow_run context — DO NOT use it here.)
 concurrency:
   group: cd-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 jobs:
   check:
-    # Skip entirely if upstream CI did not succeed.
-    # Also skip when the CI run was triggered by a pull_request — we only deploy from push events
-    # (otherwise PRs from branch 'dev' → 'master' would incorrectly trigger a CD deploy).
     if: |
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event != 'pull_request'
@@ -89,7 +81,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-      actions: read   # required by download-artifact@v4 when reading from a different workflow run
+      actions: read  
     with:
       image_tag: ${{ needs.check.outputs.image_tag }}
       environment: ${{ needs.check.outputs.environment }}
@@ -98,7 +90,6 @@ jobs:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
 
   notify:
-    # Always run after deploy attempts to report status to Discord.
     needs: [check, deploy-backend, deploy-frontend]
     if: always() && needs.check.result == 'success'
     runs-on: ubuntu-latest
@@ -124,10 +115,10 @@ jobs:
           # Treat 'failure' or 'cancelled' as a problem worth flagging.
           status_icon() {
             case "$1" in
-              success|skipped) echo "✅" ;;
-              failure)         echo "❌" ;;
-              cancelled)       echo "⚠️" ;;
-              *)               echo "ℹ️" ;;
+              success|skipped) echo "success" ;;
+              failure)         echo "failure" ;;
+              cancelled)       echo "cancelled" ;;
+              *)               echo "other" ;;
             esac
           }
 
