@@ -47,9 +47,6 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Single build: load into local docker daemon for smoke test AND
-      # (on push/workflow_dispatch) push to ECR with both SHA and 'latest' tags.
-      # Buildx supports multiple outputs in one invocation.
       - name: Build image (load + optional push)
         uses: docker/build-push-action@v5
         with:
@@ -104,7 +101,6 @@ jobs:
           docker stop backend-test
           exit 1
 
-      # Always scan on every CI run — including master push. Production must not skip scans.
       - name: Cache Trivy DB
         uses: actions/cache@v4
         with:

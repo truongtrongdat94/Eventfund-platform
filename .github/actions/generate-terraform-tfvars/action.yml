@@ -101,7 +101,7 @@ runs:
           // Generate for base terraform folder (for backward compatibility)
           const baseFilePath = path.join(process.env.GITHUB_WORKSPACE, 'terraform', 'terraform.auto.tfvars.json');
           fs.writeFileSync(baseFilePath, JSON.stringify(tfvars, null, 2));
-          console.log('✅ Generated terraform/terraform.auto.tfvars.json');
+          console.log(' Generated terraform/terraform.auto.tfvars.json');
           
           // Copy to cluster, services, and persistent folders for 3-state architecture
           const clusterFilePath = path.join(process.env.GITHUB_WORKSPACE, 'terraform', 'cluster', 'terraform.auto.tfvars.json');
@@ -109,12 +109,12 @@ runs:
           const persistentFilePath = path.join(process.env.GITHUB_WORKSPACE, 'terraform', 'persistent', 'terraform.auto.tfvars.json');
           
           fs.writeFileSync(clusterFilePath, JSON.stringify(tfvars, null, 2));
-          console.log('✅ Generated terraform/cluster/terraform.auto.tfvars.json');
+          console.log(' Generated terraform/cluster/terraform.auto.tfvars.json');
           
           fs.writeFileSync(servicesFilePath, JSON.stringify(tfvars, null, 2));
-          console.log('✅ Generated terraform/services/terraform.auto.tfvars.json');
+          console.log(' Generated terraform/services/terraform.auto.tfvars.json');
           
           fs.writeFileSync(persistentFilePath, JSON.stringify(tfvars, null, 2));
-          console.log('✅ Generated terraform/persistent/terraform.auto.tfvars.json');
+          console.log(' Generated terraform/persistent/terraform.auto.tfvars.json');
           
-          console.log('✅ Generated terraform.auto.tfvars.json with', Object.keys(tfvars).length, 'variables');
+          console.log(' Generated terraform.auto.tfvars.json with', Object.keys(tfvars).length, 'variables');

@@ -27,7 +27,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # Uses GitHub Environments — configure prod approval rules in repo Settings → Environments.
     environment: ${{ inputs.environment }}
 
     steps:
@@ -54,30 +53,15 @@ jobs:
 
       - name: Render backend ConfigMap into overlay
         env:
-          # Pin NODE_ENV per environment — overlay value, not in public_env.yml.
           NODE_ENV: ${{ inputs.environment == 'prod' && 'PROD' || 'DEV' }}
           BACKEND_PORT: ${{ steps.config.outputs.k8s_backend_port }}
           LOG_LEVEL: ${{ steps.config.outputs.k8s_log_level }}
-          RATE_LIMIT_WINDOW_MS: ${{ steps.config.outputs.k8s_rate_limit_window_ms }}
-          RATE_LIMIT_MAX_REQUESTS: ${{ steps.config.outputs.k8s_rate_limit_max_requests }}
-          AUTH_RATE_LIMIT_MAX: ${{ steps.config.outputs.k8s_auth_rate_limit_max }}
-          MIN_DEPOSIT_VND: ${{ steps.config.outputs.k8s_min_deposit_vnd }}
-          MAX_DEPOSIT_VND: ${{ steps.config.outputs.k8s_max_deposit_vnd }}
-          DEPOSIT_ORDER_EXPIRY_MINUTES: ${{ steps.config.outputs.k8s_deposit_order_expiry_minutes }}
           AUTO_EVENT_LIFECYCLE_ENABLED: ${{ steps.config.outputs.k8s_auto_event_lifecycle_enabled }}
           AUTO_EVENT_LIFECYCLE_INTERVAL_MS: ${{ steps.config.outputs.k8s_auto_event_lifecycle_interval_ms }}
           AUTO_EVENT_LIFECYCLE_SCAN_LIMIT: ${{ steps.config.outputs.k8s_auto_event_lifecycle_scan_limit }}
           AUTO_TICKETING_DEFAULT_TYPE: ${{ steps.config.outputs.k8s_auto_ticketing_default_type }}
           CHAIN_LOG_CHUNK_SIZE: ${{ steps.config.outputs.k8s_chain_log_chunk_size }}
-          JWT_EXPIRES_IN: ${{ steps.config.outputs.k8s_jwt_expires_in }}
-          SIWE_CHAIN_ID: ${{ steps.config.outputs.k8s_siwe_chain_id }}
-          DELEGATED_SIG_CHAIN_ID: ${{ steps.config.outputs.k8s_delegated_sig_chain_id }}
-          DELEGATED_SIG_DOMAIN_NAME: ${{ steps.config.outputs.k8s_delegated_sig_domain_name }}
-          DELEGATED_SIG_DOMAIN_VERSION: ${{ steps.config.outputs.k8s_delegated_sig_domain_version }}
-          RELAYER_REQUIRE_CREATE_EVENT_SIGNATURE: ${{ steps.config.outputs.k8s_relayer_require_create_event_signature }}
-          RELAYER_REQUIRE_ADMIN_STATUS_SIGNATURE: ${{ steps.config.outputs.k8s_relayer_require_admin_status_signature }}
           CONTRACTS_ARTIFACTS_DIR: ${{ steps.config.outputs.k8s_contracts_artifacts_dir }}
-          WEB3AUTH_NETWORK: ${{ steps.config.outputs.k8s_web3auth_network }}
         run: |
           set -euo pipefail
           OVERLAY_DIR="k8s/overlays/${{ inputs.environment }}"

@@ -18,15 +18,6 @@ permissions:
   contents: read
   pull-requests: read
 
-# Scan-mode is auto-detected here from the triggering event — callers don't need to pass it.
-# - pull_request event → PR decoration mode (uses pull_request.number for sonar.pullrequest.key)
-# - any other event (push, workflow_dispatch) → branch analysis mode
-#
-# Quality gate enforcement:
-# - Runs for pull_request and workflow_dispatch events.
-# - Skipped for push events (merge commit on dev/master) so a failing gate cannot block the
-#   downstream CD deploy. The PR scan was the gate; the merge commit is just record-keeping.
-
 jobs:
   sonarqube-scan:
     runs-on: ubuntu-latest
@@ -84,8 +75,6 @@ jobs:
         with:
           args: ${{ steps.sonar_args.outputs.args }}
 
-      # Skip quality gate on push events (merge commits on dev/master). PRs and manual
-      # scans still enforce the gate.
       - name: SonarQube Quality Gate check
         if: github.event_name != 'push'
         uses: SonarSource/sonarqube-quality-gate-action@v1.1.0

@@ -129,7 +129,7 @@ runs:
         CONFIG_FILE="${{ github.action_path }}/../../config/public_env.yml"
 
         if [ ! -f "$CONFIG_FILE" ]; then
-          echo "❌ Config file not found: $CONFIG_FILE"
+          echo " Config file not found: $CONFIG_FILE"
           exit 1
         fi
 
@@ -143,42 +143,45 @@ runs:
         echo "project_name=$(yq '.project.name' $CONFIG_FILE)" >> $GITHUB_OUTPUT
         echo "environment=${ENVIRONMENT}" >> $GITHUB_OUTPUT
 
-        # Environment-specific configs
-        echo "namespace=$(yq ".environments.${ENVIRONMENT}.namespace" $CONFIG_FILE)" >> $GITHUB_OUTPUT
+        # Environment-specific configs (namespace from vars, branch stays in YAML)
+        if [ "${ENVIRONMENT}" = "prod" ]; then
+          NAMESPACE="${{ vars.K8S_NAMESPACE_PROD }}"
+          FRONTEND_BUCKET="${{ vars.FRONTEND_BUCKET_PROD }}"
+          CLOUDFRONT_DIST_ID="${{ vars.CLOUDFRONT_DIST_ID_PROD }}"
+        else
+          NAMESPACE="${{ vars.K8S_NAMESPACE_DEV }}"
+          FRONTEND_BUCKET="${{ vars.FRONTEND_BUCKET_DEV }}"
+          CLOUDFRONT_DIST_ID="${{ vars.CLOUDFRONT_DIST_ID_DEV }}"
+        fi
+        echo "namespace=${NAMESPACE}" >> $GITHUB_OUTPUT
         echo "frontend_branch=$(yq ".environments.${ENVIRONMENT}.branch" $CONFIG_FILE)" >> $GITHUB_OUTPUT
 
-        # AWS
-        echo "aws_region=$(yq '.aws.region' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "aws_oidc_role_name=$(yq '.aws.oidc_role_name' $CONFIG_FILE)" >> $GITHUB_OUTPUT
+        # AWS (from vars)
+        AWS_REGION="${{ vars.AWS_REGION }}"
+        echo "aws_region=${AWS_REGION}" >> $GITHUB_OUTPUT
+        echo "aws_oidc_role_name=${{ vars.AWS_OIDC_ROLE_NAME }}" >> $GITHUB_OUTPUT
 
-        # ECR
-        echo "ecr_backend_repository=$(yq '.ecr.backend_repository' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        ECR_REPO=$(yq '.ecr.backend_repository' $CONFIG_FILE)
-        AWS_REGION=$(yq '.aws.region' $CONFIG_FILE)
+        # ECR (from vars)
+        ECR_REPO="${{ vars.ECR_BACKEND_REPOSITORY }}"
+        echo "ecr_backend_repository=${ECR_REPO}" >> $GITHUB_OUTPUT
         AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "")
         echo "ecr_backend_repository_url=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}" >> $GITHUB_OUTPUT
 
-        # S3
-        echo "s3_security_reports_bucket=$(yq '.s3.security_reports_bucket' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "s3_deploy_tmp_bucket_prefix=$(yq '.s3.deploy_tmp_bucket_prefix' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        
-        # Environment-specific S3 bucket
-        FRONTEND_BUCKET=$(yq ".environments.${ENVIRONMENT}.frontend_bucket" $CONFIG_FILE)
+        # S3 (from vars)
+        echo "s3_security_reports_bucket=${{ vars.S3_SECURITY_REPORTS_BUCKET }}" >> $GITHUB_OUTPUT
+        echo "s3_deploy_tmp_bucket_prefix=${{ vars.S3_DEPLOY_TMP_BUCKET_PREFIX }}" >> $GITHUB_OUTPUT
+
+        # Environment-specific S3 bucket (from vars)
         echo "frontend_s3_bucket=${FRONTEND_BUCKET}" >> $GITHUB_OUTPUT
-        echo "✅ Using S3 bucket: ${FRONTEND_BUCKET}"
+        echo " Using S3 bucket: ${FRONTEND_BUCKET}"
 
-        # Environment-specific CloudFront distribution ID
-        CLOUDFRONT_DIST_ID=$(yq ".environments.${ENVIRONMENT}.cloudfront_distribution_id" $CONFIG_FILE)
+        # Environment-specific CloudFront distribution ID (from vars)
         echo "cloudfront_distribution_id=${CLOUDFRONT_DIST_ID}" >> $GITHUB_OUTPUT
-        echo "✅ Using CloudFront distribution: ${CLOUDFRONT_DIST_ID}"
+        echo " Using CloudFront distribution: ${CLOUDFRONT_DIST_ID}"
 
-        # Both dev and prod CloudFront distribution IDs (for update-cloudfront-origin action)
-        CLOUDFRONT_DEV_ID=$(yq ".environments.dev.cloudfront_distribution_id" $CONFIG_FILE)
-        CLOUDFRONT_PROD_ID=$(yq ".environments.prod.cloudfront_distribution_id" $CONFIG_FILE)
-        echo "cloudfront_dev_distribution_id=${CLOUDFRONT_DEV_ID}" >> $GITHUB_OUTPUT
-        echo "cloudfront_prod_distribution_id=${CLOUDFRONT_PROD_ID}" >> $GITHUB_OUTPUT
-        echo "✅ CloudFront Dev ID: ${CLOUDFRONT_DEV_ID}"
-        echo "✅ CloudFront Prod ID: ${CLOUDFRONT_PROD_ID}"
+        # Both dev and prod CloudFront distribution IDs (from vars)
+        echo "cloudfront_dev_distribution_id=${{ vars.CLOUDFRONT_DIST_ID_DEV }}" >> $GITHUB_OUTPUT
+        echo "cloudfront_prod_distribution_id=${{ vars.CLOUDFRONT_DIST_ID_PROD }}" >> $GITHUB_OUTPUT
 
         # ArgoCD
         echo "argocd_repo_url=$(yq '.argocd.repo_url' $CONFIG_FILE)" >> $GITHUB_OUTPUT
@@ -199,38 +202,27 @@ runs:
         echo "tf_node_desired_capacity=$(yq '.terraform.node_desired_capacity' $CONFIG_FILE)" >> $GITHUB_OUTPUT
         echo "tf_node_min_capacity=$(yq '.terraform.node_min_capacity' $CONFIG_FILE)" >> $GITHUB_OUTPUT
         echo "tf_node_max_capacity=$(yq '.terraform.node_max_capacity' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "tf_vpc_cidr=$(yq '.terraform.vpc_cidr' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "tf_public_subnets_cidr=$(yq '.terraform.public_subnets_cidr' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "tf_private_subnets_cidr=$(yq '.terraform.private_subnets_cidr' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "tf_azs=$(yq '.terraform.azs' $CONFIG_FILE)" >> $GITHUB_OUTPUT
+        echo "tf_vpc_cidr=${{ vars.TF_VPC_CIDR }}" >> $GITHUB_OUTPUT
+        echo "tf_public_subnets_cidr=${{ vars.TF_PUBLIC_SUBNETS_CIDR }}" >> $GITHUB_OUTPUT
+        echo "tf_private_subnets_cidr=${{ vars.TF_PRIVATE_SUBNETS_CIDR }}" >> $GITHUB_OUTPUT
+        echo "tf_azs=${{ vars.TF_AZS }}" >> $GITHUB_OUTPUT
 
-        # New: GitHub Actions role, terraform version, security reports retention
-        echo "github_actions_role_name=$(yq '.aws.github_actions_role_name' $CONFIG_FILE)" >> $GITHUB_OUTPUT
+        # GitHub Actions role (from vars), terraform version, security reports retention
+        echo "github_actions_role_name=${{ vars.AWS_OIDC_ROLE_NAME }}" >> $GITHUB_OUTPUT
         echo "terraform_version=$(yq '.terraform.terraform_version' $CONFIG_FILE)" >> $GITHUB_OUTPUT
         echo "security_reports_retention_days=$(yq '.terraform.security_reports_retention_days' $CONFIG_FILE)" >> $GITHUB_OUTPUT
 
-        # K8s config values
+        # K8s config values (non-sensitive only — see public_env.yml for what stays inline).
+        # Sensitive runtime values (rate limits, deposit limits, JWT/SIWE/EIP-712 config,
+        # relayer flags, web3auth network) are pulled at runtime from AWS SSM Parameter Store
+        # via ExternalSecret. Do not add them back here.
         echo "k8s_backend_port=$(yq '.k8s.backend_port' $CONFIG_FILE)" >> $GITHUB_OUTPUT
         echo "k8s_log_level=$(yq '.k8s.log_level' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_rate_limit_window_ms=$(yq '.k8s.rate_limit_window_ms' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_rate_limit_max_requests=$(yq '.k8s.rate_limit_max_requests' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_auth_rate_limit_max=$(yq '.k8s.auth_rate_limit_max' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_min_deposit_vnd=$(yq '.k8s.min_deposit_vnd' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_max_deposit_vnd=$(yq '.k8s.max_deposit_vnd' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_deposit_order_expiry_minutes=$(yq '.k8s.deposit_order_expiry_minutes' $CONFIG_FILE)" >> $GITHUB_OUTPUT
         echo "k8s_auto_event_lifecycle_enabled=$(yq '.k8s.auto_event_lifecycle_enabled' $CONFIG_FILE)" >> $GITHUB_OUTPUT
         echo "k8s_auto_event_lifecycle_interval_ms=$(yq '.k8s.auto_event_lifecycle_interval_ms' $CONFIG_FILE)" >> $GITHUB_OUTPUT
         echo "k8s_auto_event_lifecycle_scan_limit=$(yq '.k8s.auto_event_lifecycle_scan_limit' $CONFIG_FILE)" >> $GITHUB_OUTPUT
         echo "k8s_auto_ticketing_default_type=$(yq '.k8s.auto_ticketing_default_type' $CONFIG_FILE)" >> $GITHUB_OUTPUT
         echo "k8s_chain_log_chunk_size=$(yq '.k8s.chain_log_chunk_size' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_jwt_expires_in=$(yq '.k8s.jwt_expires_in' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_siwe_chain_id=$(yq '.k8s.siwe_chain_id' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_delegated_sig_chain_id=$(yq '.k8s.delegated_sig_chain_id' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_delegated_sig_domain_name=$(yq '.k8s.delegated_sig_domain_name' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_delegated_sig_domain_version=$(yq '.k8s.delegated_sig_domain_version' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_relayer_require_create_event_signature=$(yq '.k8s.relayer_require_create_event_signature' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_relayer_require_admin_status_signature=$(yq '.k8s.relayer_require_admin_status_signature' $CONFIG_FILE)" >> $GITHUB_OUTPUT
         echo "k8s_contracts_artifacts_dir=$(yq '.k8s.contracts_artifacts_dir' $CONFIG_FILE)" >> $GITHUB_OUTPUT
-        echo "k8s_web3auth_network=$(yq '.k8s.web3auth_network' $CONFIG_FILE)" >> $GITHUB_OUTPUT
 
-        echo "✅ Configuration loaded successfully for environment: ${ENVIRONMENT}"
+        echo " Configuration loaded successfully for environment: ${ENVIRONMENT}"

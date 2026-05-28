@@ -31,8 +31,6 @@ jobs:
     environment: ${{ inputs.environment }}
 
     steps:
-      # Pin checkout to CI commit SHA, not the branch tip — prevents race where a newer
-      # commit landed on the branch between CI completion and CD start.
       - name: Checkout repo at CI revision
         uses: actions/checkout@v4
         with:
@@ -51,8 +49,6 @@ jobs:
           aws_account_id: ${{ secrets.AWS_ACCOUNT_ID }}
           aws_region: ${{ steps.config.outputs.aws_region }}
 
-      # Download the dist/ artifact built by CI for the same commit instead of rebuilding.
-      # This guarantees byte-for-byte identical output to what CI tested.
       - name: Download frontend artifact from CI run
         uses: actions/download-artifact@v4
         with:
