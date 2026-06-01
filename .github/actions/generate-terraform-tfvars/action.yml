@@ -73,26 +73,31 @@ runs:
           const fs = require('fs');
           const path = require('path');
           
+          // Parse JSON string inputs safely
+          const publicSubnetsCidr = JSON.parse('${{ inputs.public_subnets_cidr }}');
+          const privateSubnetsCidr = JSON.parse('${{ inputs.private_subnets_cidr }}');
+          const azs = JSON.parse('${{ inputs.azs }}');
+          
           const tfvars = {
             region: "${{ inputs.aws_region }}",
             project_name: "${{ inputs.project_name }}",
             environment: "${{ inputs.environment }}",
             vpc_cidr: "${{ inputs.vpc_cidr }}",
-            public_subnets_cidr: ${{ inputs.public_subnets_cidr }},
-            private_subnets_cidr: ${{ inputs.private_subnets_cidr }},
-            azs: ${{ inputs.azs }},
+            public_subnets_cidr: publicSubnetsCidr,
+            private_subnets_cidr: privateSubnetsCidr,
+            azs: azs,
             eks_version: "${{ inputs.eks_version }}",
             node_group_instance_types: ["${{ inputs.node_instance_type }}"],
-            node_desired_capacity: ${{ inputs.node_desired_capacity }},
-            node_min_capacity: ${{ inputs.node_min_capacity }},
-            node_max_capacity: ${{ inputs.node_max_capacity }},
+            node_desired_capacity: parseInt("${{ inputs.node_desired_capacity }}"),
+            node_min_capacity: parseInt("${{ inputs.node_min_capacity }}"),
+            node_max_capacity: parseInt("${{ inputs.node_max_capacity }}"),
             node_capacity_type: "SPOT",
             ecr_backend_repo: "${{ inputs.ecr_backend_repository }}",
             ssm_prefix: "/${{ inputs.project_name }}/${{ inputs.environment }}/backend",
             github_actions_role_name: "${{ inputs.github_actions_role_name }}",
             github_repos: ["repo:${{ inputs.github_repository }}:*"],
             security_reports_bucket: "${{ inputs.s3_security_reports_bucket }}",
-            security_reports_retention_days: ${{ inputs.security_reports_retention_days }},
+            security_reports_retention_days: parseInt("${{ inputs.security_reports_retention_days }}"),
             argocd_repo_url: "${{ inputs.argocd_repo_url }}",
             argocd_target_revision: "${{ inputs.argocd_target_revision }}",
             argocd_app_namespace: "${{ inputs.argocd_app_namespace }}"
