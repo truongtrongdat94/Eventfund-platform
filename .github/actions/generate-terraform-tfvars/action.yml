@@ -73,10 +73,61 @@ runs:
           const fs = require('fs');
           const path = require('path');
           
-          // Parse JSON string inputs safely
-          const publicSubnetsCidr = JSON.parse('${{ inputs.public_subnets_cidr }}');
-          const privateSubnetsCidr = JSON.parse('${{ inputs.private_subnets_cidr }}');
-          const azs = JSON.parse('${{ inputs.azs }}');
+          // Helper function to safely parse array inputs
+          function parseArrayInput(input) {
+            // If already an array, return it
+            if (Array.isArray(input)) {
+              return input;
+            }
+            
+            // If string, try multiple parsing strategies
+            if (typeof input === 'string') {
+              const trimmed = input.trim();
+              
+              // Try JSON parse first
+              try {
+                const parsed = JSON.parse(trimmed);
+                if (Array.isArray(parsed)) {
+                  return parsed;
+                }
+              } catch (e) {
+                // Not valid JSON, continue to other strategies
+              }
+              
+              // Try parsing as comma-separated values
+              if (trimmed.includes(',')) {
+                return trimmed
+                  .replace(/[\[\]"']/g, '') // Remove brackets and quotes
+                  .split(',')
+                  .map(s => s.trim())
+                  .filter(s => s.length > 0);
+              }
+              
+              // Single value, return as array
+              return [trimmed.replace(/[\[\]"']/g, '')];
+            }
+            
+            return input;
+          }
+          
+          // Parse inputs
+          const publicSubnetsCidrRaw = '${{ inputs.public_subnets_cidr }}';
+          const privateSubnetsCidrRaw = '${{ inputs.private_subnets_cidr }}';
+          const azsRaw = '${{ inputs.azs }}';
+          
+          console.log('=== Raw inputs ===');
+          console.log('public_subnets_cidr:', publicSubnetsCidrRaw);
+          console.log('private_subnets_cidr:', privateSubnetsCidrRaw);
+          console.log('azs:', azsRaw);
+          
+          const publicSubnetsCidr = parseArrayInput(publicSubnetsCidrRaw);
+          const privateSubnetsCidr = parseArrayInput(privateSubnetsCidrRaw);
+          const azs = parseArrayInput(azsRaw);
+          
+          console.log('\n=== Parsed arrays ===');
+          console.log('public_subnets_cidr:', JSON.stringify(publicSubnetsCidr));
+          console.log('private_subnets_cidr:', JSON.stringify(privateSubnetsCidr));
+          console.log('azs:', JSON.stringify(azs));
           
           const tfvars = {
             region: "${{ inputs.aws_region }}",
